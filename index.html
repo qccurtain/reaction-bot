@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Reaction Bot v0.1</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <header>
+      <h1>REACTION BOT <span class="ver">v0.1</span></h1>
+      <p class="privacy-note">
+        Face processing runs locally on this device. Camera frames are not uploaded or stored.
+      </p>
+    </header>
+
+    <section class="camera-wrap">
+      <video id="video" autoplay playsinline muted></video>
+      <div id="faceDot" class="face-dot" title="Face detected"></div>
+      <div id="statusBadge" class="status-badge">Idle</div>
+    </section>
+
+    <section class="state-display">
+      <div id="stateText" class="state-text">NEUTRAL</div>
+      <div id="confidenceText" class="confidence-text">Confidence: --</div>
+      <div id="calibrationText" class="calibration-text"></div>
+    </section>
+
+    <section class="controls">
+      <button id="btnStart" class="btn primary">Start Camera</button>
+      <button id="btnRecalibrate" class="btn" disabled>Recalibrate Neutral</button>
+      <button id="btnPause" class="btn" disabled>Pause</button>
+      <button id="btnResume" class="btn" disabled hidden>Resume</button>
+      <button id="btnDebug" class="btn">Show Debug</button>
+      <button id="btnReset" class="btn" disabled>Reset State</button>
+    </section>
+
+    <section class="manual-test">
+      <p class="hint">Manual test: click a state to inspect its live signal breakdown.</p>
+      <div id="stateChips" class="state-chips">
+        <button class="chip" data-state="SHOCKED">SHOCKED</button>
+        <button class="chip" data-state="HAPPY">HAPPY</button>
+        <button class="chip" data-state="CONFUSED">CONFUSED</button>
+        <button class="chip" data-state="TILTED">TILTED</button>
+        <button class="chip" data-state="LOCKED_IN">LOCKED_IN</button>
+        <button class="chip" data-state="DEAD_INSIDE">DEAD_INSIDE</button>
+      </div>
+    </section>
+
+    <section id="debugPanel" class="debug-panel" hidden>
+      <h2>Debug</h2>
+      <div class="debug-grid">
+        <div>FPS: <span id="dbgFps">--</span></div>
+        <div>Face detected: <span id="dbgFace">--</span></div>
+        <div>Candidate state: <span id="dbgCandidate">--</span></div>
+        <div>Candidate duration: <span id="dbgCandidateDur">--</span></div>
+        <div>Active duration: <span id="dbgActiveDur">--</span></div>
+        <div>Session active: <span id="dbgSession">--</span></div>
+        <div>Activity meter: <span id="dbgActivity">--</span></div>
+        <div>Head roll (deg): <span id="dbgRoll">--</span></div>
+      </div>
+
+      <h3>Blendshapes (smoothed)</h3>
+      <div class="debug-grid" id="dbgBlendshapes"></div>
+
+      <h3 id="dbgInspectTitle">Inspect: (click a state chip above)</h3>
+      <pre id="dbgInspect">--</pre>
+    </section>
+
+    <footer>
+      <p>v0.1 prototype — validating phone-side MediaPipe facial signals. No Twitch integration yet.</p>
+    </footer>
+  </div>
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>

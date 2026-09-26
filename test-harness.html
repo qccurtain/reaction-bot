@@ -1,0 +1,178 @@
+<!doctype html>
+<html><body>
+<pre id="out">running…</pre>
+<script type="module">
+import { BaselineCollector } from "./src/baseline.js";
+import { StateEngine } from "./src/stateEngine.js";
+import { STATES } from "./src/config.js";
+
+// ---- fake clock: advance time deterministically instead of relying on
+// real wall-clock waits, since baseline.js/stateEngine.js only ever call
+// performance.now() fresh (never cache it), so overriding it here affects
+// every persistence-timer check inside them. ----
+let fakeNow = 1_000_000;
+performance.now = () => fakeNow;
+function tick(ms) { fakeNow += ms; }
+
+const results = [];
+function log(line) { results.push(line); }
+
+function neutralFrame(overrides = {}) {
+  const base = {
+    eyeWideLeft: 0.05, eyeWideRight: 0.05, jawOpen: 0.02, browInnerUp: 0.05,
+    mouthSmileLeft: 0.03, mouthSmileRight: 0.03, cheekSquintLeft: 0.02, cheekSquintRight: 0.02,
+    browDownLeft: 0.05, browDownRight: 0.05, eyeSquintLeft: 0.05, eyeSquintRight: 0.05,
+    mouthPressLeft: 0.02, mouthPressRight: 0.02, mouthFrownLeft: 0.02, mouthFrownRight: 0.02,
+    browOuterUpLeft: 0.05, browOuterUpRight: 0.05, mouthLowerDownLeft: 0.02, mouthLowerDownRight: 0.02,
+    eyeBlinkLeft: 0.1, eyeBlinkRight: 0.1,
+  };
+  return { ...base, ...overrides };
+}
+let seed = 42;
+function rand() { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return (seed / 0x7fffffff); }
+function jitter(frame, amt = 0.01) {
+  const out = {};
+  for (const [k, v] of Object.entries(frame)) out[k] = Math.max(0, v + (rand() - 0.5) * amt);
+  return out;
+}
+
+const FRAME_MS = 1000 / 12; // matches CONFIG.fps.targetInferenceFps
+
+async function run() {
+  // ---- 1. calibration ----
+  const baseline = new BaselineCollector();
+  baseline.start();
+  for (let i = 0; i < 130; i++) { // ~130 frames * ~83ms = ~10.8s
+    baseline.addSample(jitter(neutralFrame()));
+    tick(FRAME_MS);
+  }
+  log("calibration done: " + baseline.done + " mean.jawOpen=" + baseline.mean.jawOpen.toFixed(3) + " samples=" + baseline.samples.length);
+
+  const engine = new StateEngine(baseline);
+  engine.beginSession();
+  tick(20000); // pretend 20s of session time already passed (past LOCKED_IN gate)
+
+  function feed(frame, headAngles = { roll: 0, pitch: 0, yaw: 0 }, advanceMs = FRAME_MS) {
+    const r = engine.update({ present: true, blendshapes: frame, headAngles });
+    tick(advanceMs);
+    return r;
+  }
+
+  // ---- 2. SHOCKED: sudden eye-wide + jaw open spike ----
+  for (let i = 0; i < 5; i++) feed(jitter(neutralFrame())); // settle EMAs
+  let r, shockedHit = false, framesToShock = 0;
+  for (let i = 0; i < 30; i++) {
+    r = feed(jitter(neutralFrame({ eyeWideLeft: 0.9, eyeWideRight: 0.9, jawOpen: 0.7, browInnerUp: 0.6 })));
+    framesToShock++;
+    if (r.state === STATES.SHOCKED) { shockedHit = true; break; }
+  }
+  log(`SHOCKED test: reached=${shockedHit} state=${r.state} confidence=${r.confidence.toFixed(2)} framesToTrigger=${framesToShock} (~${(framesToShock*FRAME_MS).toFixed(0)}ms)`);
+
+  let decayed = false, framesToDecay = 0;
+  for (let i = 0; i < 40; i++) {
+    r = feed(jitter(neutralFrame()));
+    framesToDecay++;
+    if (r.state !== STATES.SHOCKED) { decayed = true; break; }
+  }
+  log(`SHOCKED decay test: decayed=${decayed} state=${r.state} framesToDecay=${framesToDecay} (~${(framesToDecay*FRAME_MS).toFixed(0)}ms)`);
+
+  // ---- 3. HAPPY: sustained smile ----
+  let happyHit = false, fCount = 0;
+  for (let i = 0; i < 40; i++) {
+    r = feed(jitter(neutralFrame({ mouthSmileLeft: 0.85, mouthSmileRight: 0.85, cheekSquintLeft: 0.5, cheekSquintRight: 0.5 })));
+    fCount++;
+    if (r.state === STATES.HAPPY) { happyHit = true; break; }
+  }
+  log(`HAPPY test: reached=${happyHit} state=${r.state} confidence=${r.confidence.toFixed(2)} frames=${fCount} (~${(fCount*FRAME_MS).toFixed(0)}ms)`);
+
+  for (let i = 0; i < 30; i++) r = feed(jitter(neutralFrame()));
+  log(`back to neutral after happy: state=${r.state}`);
+
+  // ---- 4. TILTED: sustained brow-down + squint + mouth press ----
+  let tiltedHit = false; fCount = 0;
+  for (let i = 0; i < 80; i++) {
+    r = feed(jitter(neutralFrame({ browDownLeft: 0.8, browDownRight: 0.8, eyeSquintLeft: 0.7, eyeSquintRight: 0.7, mouthPressLeft: 0.7, mouthPressRight: 0.7, mouthFrownLeft: 0.6, mouthFrownRight: 0.6 })));
+    fCount++;
+    if (r.state === STATES.TILTED) { tiltedHit = true; break; }
+  }
+  log(`TILTED test: reached=${tiltedHit} state=${r.state} confidence=${r.confidence.toFixed(2)} frames=${fCount} (~${(fCount*FRAME_MS).toFixed(0)}ms)`);
+
+  for (let i = 0; i < 30; i++) r = feed(jitter(neutralFrame()));
+  log(`back to neutral after tilted: state=${r.state}`);
+
+  // ---- 5. mild ambiguous asymmetry should NOT force CONFUSED ----
+  let confusedFalsePositive = false;
+  for (let i = 0; i < 60; i++) {
+    r = feed(jitter(neutralFrame({ browDownLeft: 0.25, eyeSquintRight: 0.2 })), { roll: 0.02, pitch: 0, yaw: 0 });
+    if (r.state === STATES.CONFUSED) confusedFalsePositive = true;
+  }
+  log(`CONFUSED false-positive check (mild asym): falsePositive=${confusedFalsePositive} finalState=${r.state}`);
+
+  for (let i = 0; i < 20; i++) r = feed(jitter(neutralFrame()));
+
+  // ---- 6. CONFUSED: strong sustained asymmetry + head tilt ----
+  let confusedHit = false; fCount = 0;
+  for (let i = 0; i < 80; i++) {
+    r = feed(jitter(neutralFrame({ browDownLeft: 0.75, browOuterUpRight: 0.6, eyeSquintLeft: 0.7 })), { roll: 0.24, pitch: 0, yaw: 0 });
+    fCount++;
+    if (r.state === STATES.CONFUSED) { confusedHit = true; break; }
+  }
+  log(`CONFUSED test: reached=${confusedHit} state=${r.state} confidence=${r?.confidence?.toFixed?.(2)} frames=${fCount} (~${(fCount*FRAME_MS).toFixed(0)}ms)`);
+
+  // ---- 7. LOCKED_IN: long stable stillness (session already 20s old) ----
+  const engine2 = new StateEngine(baseline);
+  engine2.beginSession();
+  tick(20000);
+  let lockedHit = false, r2, iters = 0;
+  for (let i = 0; i < 400; i++) {
+    r2 = engine2.update({ present: true, blendshapes: jitter(neutralFrame(), 0.003), headAngles: { roll: 0.001 * (i % 3), pitch: 0, yaw: 0 } });
+    tick(FRAME_MS);
+    iters++;
+    if (r2.state === STATES.LOCKED_IN) { lockedHit = true; break; }
+  }
+  log(`LOCKED_IN test: reached=${lockedHit} state=${r2.state} confidence=${r2.confidence.toFixed(2)} frames=${iters} (~${(iters*FRAME_MS).toFixed(0)}ms)`);
+
+  // ---- 8. LOCKED_IN should NOT fire before session eligibility window ----
+  const engine3 = new StateEngine(baseline);
+  engine3.beginSession(); // session just started (0ms old)
+  let lockedTooEarly = false, r3;
+  for (let i = 0; i < 400; i++) {
+    r3 = engine3.update({ present: true, blendshapes: jitter(neutralFrame(), 0.003), headAngles: { roll: 0, pitch: 0, yaw: 0 } });
+    tick(FRAME_MS);
+    if (r3.state === STATES.LOCKED_IN) { lockedTooEarly = true; break; }
+    if (fakeNow - engine3.sessionStartAt > 6000) break; // only need to check within LOCKED_IN's own min-duration window
+  }
+  log(`LOCKED_IN too-early check (within its own 5s window, session <15s old): firedTooEarly=${lockedTooEarly} finalState=${r3.state}`);
+
+  // ---- 9. DEAD_INSIDE: even longer, even lower activity ----
+  const engine4 = new StateEngine(baseline);
+  engine4.beginSession();
+  tick(20000);
+  let deadHit = false, r4, iters4 = 0;
+  for (let i = 0; i < 700; i++) {
+    r4 = engine4.update({ present: true, blendshapes: jitter(neutralFrame(), 0.0005), headAngles: { roll: 0, pitch: 0, yaw: 0 } });
+    tick(FRAME_MS);
+    iters4++;
+    if (r4.state === STATES.DEAD_INSIDE) { deadHit = true; break; }
+  }
+  log(`DEAD_INSIDE test: reached=${deadHit} state=${r4.state} confidence=${r4.confidence.toFixed(2)} frames=${iters4} (~${(iters4*FRAME_MS).toFixed(0)}ms)`);
+
+  // ---- 10. SHOCKED interrupts LOCKED_IN ----
+  let interrupted = false, r5;
+  for (let i = 0; i < 10; i++) {
+    r5 = engine2.update({ present: true, blendshapes: jitter(neutralFrame({ eyeWideLeft: 0.9, eyeWideRight: 0.9, jawOpen: 0.8 })), headAngles: { roll: 0, pitch: 0, yaw: 0 } });
+    tick(FRAME_MS);
+    if (r5.state === STATES.SHOCKED) { interrupted = true; break; }
+  }
+  log(`SHOCKED interrupts LOCKED_IN: wasLockedIn=${lockedHit} interrupted=${interrupted} postState=${r5.state}`);
+
+  document.getElementById("out").textContent = results.join("\n");
+  console.log("TEST_HARNESS_RESULTS\n" + results.join("\n"));
+}
+
+run().catch((e) => {
+  document.getElementById("out").textContent = "ERROR: " + e.stack;
+  console.error(e);
+});
+</script>
+</body></html>
