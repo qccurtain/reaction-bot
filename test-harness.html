@@ -4,7 +4,8 @@
 <script type="module">
 import { BaselineCollector } from "./src/baseline.js";
 import { StateEngine } from "./src/stateEngine.js";
-import { STATES } from "./src/config.js";
+import { ExpressionCalibrator, personalizeWeights } from "./src/expressionCalibration.js";
+import { STATES, CONFIG } from "./src/config.js";
 
 // ---- fake clock: advance time deterministically instead of relying on
 // real wall-clock waits, since baseline.js/stateEngine.js only ever call
@@ -15,7 +16,13 @@ performance.now = () => fakeNow;
 function tick(ms) { fakeNow += ms; }
 
 const results = [];
+let pass = 0, fail = 0;
 function log(line) { results.push(line); }
+function assert(cond, label) {
+  if (cond) { pass++; log(`PASS: ${label}`); }
+  else { fail++; log(`FAIL: ${label}`); }
+  return cond;
+}
 
 function neutralFrame(overrides = {}) {
   const base = {
@@ -35,94 +42,228 @@ function jitter(frame, amt = 0.01) {
   for (const [k, v] of Object.entries(frame)) out[k] = Math.max(0, v + (rand() - 0.5) * amt);
   return out;
 }
-
 const FRAME_MS = 1000 / 12; // matches CONFIG.fps.targetInferenceFps
+const noAngles = { roll: 0, pitch: 0, yaw: 0 };
 
-async function run() {
-  // ---- 1. calibration ----
+function buildNeutralBaseline(neutralOverrides = {}) {
   const baseline = new BaselineCollector();
   baseline.start();
-  for (let i = 0; i < 130; i++) { // ~130 frames * ~83ms = ~10.8s
-    baseline.addSample(jitter(neutralFrame()));
+  for (let i = 0; i < 130; i++) {
+    baseline.addSample(jitter(neutralFrame(neutralOverrides)));
     tick(FRAME_MS);
   }
-  log("calibration done: " + baseline.done + " mean.jawOpen=" + baseline.mean.jawOpen.toFixed(3) + " samples=" + baseline.samples.length);
+  return baseline;
+}
 
-  const engine = new StateEngine(baseline);
+function freshEngine(baseline, exprCalibrator = null) {
+  const engine = new StateEngine(baseline, exprCalibrator);
   engine.beginSession();
-  tick(20000); // pretend 20s of session time already passed (past LOCKED_IN gate)
+  tick(20000); // past the LOCKED_IN/DEAD_INSIDE session-eligibility gate for all tests
+  return engine;
+}
 
-  function feed(frame, headAngles = { roll: 0, pitch: 0, yaw: 0 }, advanceMs = FRAME_MS) {
+async function run() {
+  log("=== SECTION 1: default path (calibration skipped) still works ===");
+  const baseline = buildNeutralBaseline();
+  log(`calibration done=${baseline.done} mean.jawOpen=${baseline.mean.jawOpen.toFixed(3)} samples=${baseline.samples.length}`);
+
+  const engine = freshEngine(baseline); // no exprCalibrator -- default path only
+  function feed(frame, headAngles = noAngles) {
     const r = engine.update({ present: true, blendshapes: frame, headAngles });
-    tick(advanceMs);
+    tick(FRAME_MS);
     return r;
   }
 
-  // ---- 2. SHOCKED: sudden eye-wide + jaw open spike ----
-  for (let i = 0; i < 5; i++) feed(jitter(neutralFrame())); // settle EMAs
-  let r, shockedHit = false, framesToShock = 0;
+  for (let i = 0; i < 5; i++) feed(jitter(neutralFrame()));
+  let r, framesToShock = 0;
   for (let i = 0; i < 30; i++) {
     r = feed(jitter(neutralFrame({ eyeWideLeft: 0.9, eyeWideRight: 0.9, jawOpen: 0.7, browInnerUp: 0.6 })));
     framesToShock++;
-    if (r.state === STATES.SHOCKED) { shockedHit = true; break; }
+    if (r.state === STATES.SHOCKED) break;
   }
-  log(`SHOCKED test: reached=${shockedHit} state=${r.state} confidence=${r.confidence.toFixed(2)} framesToTrigger=${framesToShock} (~${(framesToShock*FRAME_MS).toFixed(0)}ms)`);
+  assert(r.state === STATES.SHOCKED, "SHOCKED fires on classic wide-eye+jaw+brow spike");
+  assert(framesToShock * FRAME_MS <= 800 && framesToShock * FRAME_MS >= 200, `SHOCKED fire time ~${(framesToShock*FRAME_MS).toFixed(0)}ms is within spec's 300-800ms-ish window`);
 
-  let decayed = false, framesToDecay = 0;
+  let framesToDecay = 0;
   for (let i = 0; i < 40; i++) {
     r = feed(jitter(neutralFrame()));
     framesToDecay++;
-    if (r.state !== STATES.SHOCKED) { decayed = true; break; }
+    if (r.state !== STATES.SHOCKED) break;
   }
-  log(`SHOCKED decay test: decayed=${decayed} state=${r.state} framesToDecay=${framesToDecay} (~${(framesToDecay*FRAME_MS).toFixed(0)}ms)`);
+  assert(r.state === STATES.NEUTRAL, "SHOCKED decays back to NEUTRAL quickly once expression drops");
 
-  // ---- 3. HAPPY: sustained smile ----
-  let happyHit = false, fCount = 0;
+  let fCount = 0;
   for (let i = 0; i < 40; i++) {
     r = feed(jitter(neutralFrame({ mouthSmileLeft: 0.85, mouthSmileRight: 0.85, cheekSquintLeft: 0.5, cheekSquintRight: 0.5 })));
     fCount++;
-    if (r.state === STATES.HAPPY) { happyHit = true; break; }
+    if (r.state === STATES.HAPPY) break;
   }
-  log(`HAPPY test: reached=${happyHit} state=${r.state} confidence=${r.confidence.toFixed(2)} frames=${fCount} (~${(fCount*FRAME_MS).toFixed(0)}ms)`);
-
+  assert(r.state === STATES.HAPPY, "HAPPY fires on sustained smile");
   for (let i = 0; i < 30; i++) r = feed(jitter(neutralFrame()));
-  log(`back to neutral after happy: state=${r.state}`);
+  assert(r.state === STATES.NEUTRAL, "back to NEUTRAL after HAPPY decays");
 
-  // ---- 4. TILTED: sustained brow-down + squint + mouth press ----
-  let tiltedHit = false; fCount = 0;
+  fCount = 0;
   for (let i = 0; i < 80; i++) {
     r = feed(jitter(neutralFrame({ browDownLeft: 0.8, browDownRight: 0.8, eyeSquintLeft: 0.7, eyeSquintRight: 0.7, mouthPressLeft: 0.7, mouthPressRight: 0.7, mouthFrownLeft: 0.6, mouthFrownRight: 0.6 })));
     fCount++;
-    if (r.state === STATES.TILTED) { tiltedHit = true; break; }
+    if (r.state === STATES.TILTED) break;
   }
-  log(`TILTED test: reached=${tiltedHit} state=${r.state} confidence=${r.confidence.toFixed(2)} frames=${fCount} (~${(fCount*FRAME_MS).toFixed(0)}ms)`);
-
+  assert(r.state === STATES.TILTED, "TILTED fires when ALL FOUR signals move together (full combo, default path)");
   for (let i = 0; i < 30; i++) r = feed(jitter(neutralFrame()));
-  log(`back to neutral after tilted: state=${r.state}`);
+  assert(r.state === STATES.NEUTRAL, "back to NEUTRAL after TILTED decays (not stuck in DEAD_INSIDE from the held-expression activity-meter fix)");
 
-  // ---- 5. mild ambiguous asymmetry should NOT force CONFUSED ----
-  let confusedFalsePositive = false;
+  log("");
+  log("=== SECTION 2: personal expression calibration -- rejection ===");
+  const ec = new ExpressionCalibrator(baseline);
+  const flatBurst = ec.createBurstCollector();
+  flatBurst.start();
+  for (let i = 0; i < 40; i++) { flatBurst.addSample(jitter(neutralFrame())); tick(FRAME_MS); } // indistinguishable from neutral
+  const flatEval = ec.evaluateBurst("FROWN", flatBurst);
+  assert(flatEval.accepted === false, `an indistinguishable-from-neutral FROWN sample is REJECTED (maxSalience=${flatEval.maxSalience.toFixed(2)})`);
+  ec.commit(flatEval); // committing a rejected result must be a no-op for scoring
+  assert(ec.isCalibrated("FROWN") === false, "a rejected profile does not count as calibrated even if commit() is called on it");
+
+  log("");
+  log("=== SECTION 3: valid personal calibration measurably helps a real shortfall ===");
+  // Controlled scenario: this person's FROWN shows strongly in browDown+eyeSquint
+  // only (mouthPress/mouthFrown stay at neutral) -- exactly the "only one or two
+  // channels move" pattern reported from real phone testing. With the DEFAULT
+  // weights, browDown(0.3)+eyeSquint(0.25) sums to 0.55, which is structurally
+  // BELOW the 0.6 enterThreshold even if both saturate at sig=1.0 -- no amount
+  // of "trying harder" on just those two channels can ever cross by default.
+  const browBand = avgBand(baseline, ["browDownLeft", "browDownRight"]);
+  const squintBand = avgBand(baseline, ["eyeSquintLeft", "eyeSquintRight"]);
+  const browNeutral = avgMean(baseline, ["browDownLeft", "browDownRight"]);
+  const squintNeutral = avgMean(baseline, ["eyeSquintLeft", "eyeSquintRight"]);
+  const frownBurst = ec.createBurstCollector();
+  frownBurst.start();
+  for (let i = 0; i < 40; i++) {
+    frownBurst.addSample(jitter(neutralFrame({
+      browDownLeft: browNeutral + browBand * 2.0,
+      browDownRight: browNeutral + browBand * 2.0,
+      eyeSquintLeft: squintNeutral + squintBand * 2.5,
+      eyeSquintRight: squintNeutral + squintBand * 2.5,
+      // mouthPress/mouthFrown left at neutral -- this person's frown doesn't use them
+    }), 0.02));
+    tick(FRAME_MS);
+  }
+  const frownEval = ec.evaluateBurst("FROWN", frownBurst);
+  assert(frownEval.accepted === true, `a genuine (if partial) FROWN sample is ACCEPTED (maxSalience=${frownEval.maxSalience.toFixed(2)})`);
+  ec.commit(frownEval);
+  assert(ec.isCalibrated("FROWN") === true, "FROWN profile is now calibrated");
+
+  const liveTiltedAttempt = () => neutralFrame({
+    browDownLeft: browNeutral + browBand * 1.8,
+    browDownRight: browNeutral + browBand * 1.8,
+    eyeSquintLeft: squintNeutral + squintBand * 2.2,
+    eyeSquintRight: squintNeutral + squintBand * 2.2,
+  });
+
+  const engineDefault = freshEngine(baseline, null);
+  const engineCalibrated = freshEngine(baseline, ec);
+  let rDefault, rCalibrated;
   for (let i = 0; i < 60; i++) {
-    r = feed(jitter(neutralFrame({ browDownLeft: 0.25, eyeSquintRight: 0.2 })), { roll: 0.02, pitch: 0, yaw: 0 });
-    if (r.state === STATES.CONFUSED) confusedFalsePositive = true;
+    rDefault = engineDefault.update({ present: true, blendshapes: jitter(liveTiltedAttempt(), 0.02), headAngles: noAngles });
+    rCalibrated = engineCalibrated.update({ present: true, blendshapes: jitter(liveTiltedAttempt(), 0.02), headAngles: noAngles });
+    tick(FRAME_MS);
   }
-  log(`CONFUSED false-positive check (mild asym): falsePositive=${confusedFalsePositive} finalState=${r.state}`);
+  assert(rDefault.state !== STATES.TILTED, `WITHOUT personalization, this same partial (2-of-4-signal) attempt correctly does NOT reach TILTED (default score capped ~0.55 < 0.6 threshold)`);
+  assert(rCalibrated.state === STATES.TILTED, `WITH personalization, the identical live attempt DOES reach TILTED (weight redistributed toward the channels this person actually demonstrated)`);
 
-  for (let i = 0; i < 20; i++) r = feed(jitter(neutralFrame()));
-
-  // ---- 6. CONFUSED: strong sustained asymmetry + head tilt ----
-  let confusedHit = false; fCount = 0;
-  for (let i = 0; i < 80; i++) {
-    r = feed(jitter(neutralFrame({ browDownLeft: 0.75, browOuterUpRight: 0.6, eyeSquintLeft: 0.7 })), { roll: 0.24, pitch: 0, yaw: 0 });
-    fCount++;
-    if (r.state === STATES.CONFUSED) { confusedHit = true; break; }
+  log("");
+  log("=== SECTION 4: high resting (neutral) signal doesn't false-trigger ===");
+  // Directly modeled on the real report: a person whose resting eyeSquint is
+  // ~0.29 (not near 0). Being AT that resting value -- or briefly a hair above
+  // it from noise -- must not itself read as TILTED.
+  const highSquintBaseline = buildNeutralBaseline({ eyeSquintLeft: 0.29, eyeSquintRight: 0.29 });
+  const engineHighSquint = freshEngine(highSquintBaseline);
+  let rHigh;
+  for (let i = 0; i < 60; i++) {
+    rHigh = engineHighSquint.update({ present: true, blendshapes: jitter(neutralFrame({ eyeSquintLeft: 0.29, eyeSquintRight: 0.29 }), 0.01), headAngles: noAngles });
+    tick(FRAME_MS);
   }
-  log(`CONFUSED test: reached=${confusedHit} state=${r.state} confidence=${r?.confidence?.toFixed?.(2)} frames=${fCount} (~${(fCount*FRAME_MS).toFixed(0)}ms)`);
+  assert(rHigh.state === STATES.NEUTRAL, `a person with high (0.29) resting eyeSquint sitting at their own neutral does NOT trigger TILTED (state=${rHigh.state})`);
 
-  // ---- 7. LOCKED_IN: long stable stillness (session already 20s old) ----
-  const engine2 = new StateEngine(baseline);
-  engine2.beginSession();
-  tick(20000);
+  log("");
+  log("=== SECTION 5: candidate appears BEFORE confirmation, and is distinct from `state` ===");
+  const engineCand = freshEngine(baseline);
+  let rCand;
+  // Feed strong TILTED-qualifying signal for less than its 2000ms minDuration.
+  for (let i = 0; i < 12; i++) { // 12 * 83ms ~= 1000ms < 2000ms required
+    rCand = engineCand.update({
+      present: true,
+      blendshapes: jitter(neutralFrame({ browDownLeft: 0.8, browDownRight: 0.8, eyeSquintLeft: 0.7, eyeSquintRight: 0.7, mouthPressLeft: 0.7, mouthPressRight: 0.7, mouthFrownLeft: 0.6, mouthFrownRight: 0.6 })),
+      headAngles: noAngles,
+    });
+    tick(FRAME_MS);
+  }
+  assert(rCand.state === STATES.NEUTRAL, "state correctly still NEUTRAL before TILTED's 2000ms persistence requirement is met");
+  assert(rCand.candidateState === STATES.TILTED, `candidateState correctly shows TILTED as the in-progress contender (was: candidate always == state, a real bug) -- got ${rCand.candidateState}`);
+  assert(rCand.candidateDurationMs > 0 && rCand.candidateDurationMs < CONFIG.states.TILTED.minDurationMs, `candidateDurationMs (${rCand.candidateDurationMs.toFixed(0)}ms) reflects real in-progress time, less than the ${CONFIG.states.TILTED.minDurationMs}ms target`);
+  // keep feeding until it actually confirms
+  for (let i = 0; i < 20; i++) {
+    rCand = engineCand.update({
+      present: true,
+      blendshapes: jitter(neutralFrame({ browDownLeft: 0.8, browDownRight: 0.8, eyeSquintLeft: 0.7, eyeSquintRight: 0.7, mouthPressLeft: 0.7, mouthPressRight: 0.7, mouthFrownLeft: 0.6, mouthFrownRight: 0.6 })),
+      headAngles: noAngles,
+    });
+    tick(FRAME_MS);
+    if (rCand.state === STATES.TILTED) break;
+  }
+  assert(rCand.state === STATES.TILTED, "state eventually confirms TILTED once minDuration is satisfied");
+  assert(rCand.candidateState === STATES.TILTED, "candidateState still (correctly) reports TILTED once confirmed");
+
+  log("");
+  log("=== SECTION 6: face-loss and pause gaps don't accumulate stale evidence ===");
+  const engineGap = freshEngine(baseline);
+  // Build PARTIAL evidence toward SHOCKED (well under its 350ms minDuration).
+  let rGap;
+  for (let i = 0; i < 2; i++) { // ~166ms of strong evidence, well under 350ms
+    rGap = engineGap.update({ present: true, blendshapes: jitter(neutralFrame({ eyeWideLeft: 0.9, eyeWideRight: 0.9, jawOpen: 0.7, browInnerUp: 0.6 })), headAngles: noAngles });
+    tick(FRAME_MS);
+  }
+  assert(rGap.state !== STATES.SHOCKED, "SHOCKED correctly not yet confirmed after only ~166ms of evidence");
+  const goteSince = engineGap.gates[STATES.SHOCKED].aboveSince;
+  assert(goteSince !== null, "sanity: the gate DID start accumulating (aboveSince is set)");
+
+  // Simulate a face-loss dropout of several seconds -- long enough that, if the
+  // stale aboveSince timestamp were left untouched, `now - aboveSince` would
+  // instantly exceed minDurationMs on the very next frame.
+  rGap = engineGap.update({ present: false, blendshapes: {}, headAngles: noAngles });
+  const clearedAfterLoss = engineGap.gates[STATES.SHOCKED].aboveSince === null;
+  tick(4000); // 4s gap with no face
+  // Feed several neutral frames on return (not just one) -- fastEma takes a
+  // couple frames to decay from the pre-gap spike, so the meaningful check is
+  // that it never gets to stay above-threshold for a full minDurationMs, not
+  // that the very first post-gap frame is instantly back at exactly zero.
+  let everFalseConfirmed = false;
+  for (let i = 0; i < 15; i++) {
+    rGap = engineGap.update({ present: true, blendshapes: jitter(neutralFrame()), headAngles: noAngles });
+    tick(FRAME_MS);
+    if (rGap.state === STATES.SHOCKED) everFalseConfirmed = true;
+  }
+  assert(clearedAfterLoss, "freezeGates() clears the gate's aboveSince the instant the face is lost");
+  assert(!everFalseConfirmed, `face-loss gap does NOT let stale timing false-confirm SHOCKED once the face returns to neutral (final state=${rGap.state})`);
+
+  // Now the equivalent for an explicit pause/calibration-style gap: build
+  // partial evidence, call freezeGates() directly (what main.js does whenever
+  // leaving the running state), let a lot of wall-clock time pass, then feed
+  // neutral frames and confirm no false-confirm.
+  const enginePause = freshEngine(baseline);
+  let rPause;
+  for (let i = 0; i < 2; i++) {
+    rPause = enginePause.update({ present: true, blendshapes: jitter(neutralFrame({ eyeWideLeft: 0.9, eyeWideRight: 0.9, jawOpen: 0.7, browInnerUp: 0.6 })), headAngles: noAngles });
+    tick(FRAME_MS);
+  }
+  assert(rPause.state !== STATES.SHOCKED, "sanity: SHOCKED not yet confirmed before the simulated pause");
+  enginePause.freezeGates(); // what leaveRunning()/enterRunning() do around a pause/calibration gap
+  tick(15000); // 15s "pause" while the UI shows a calibration/personalize screen
+  rPause = enginePause.update({ present: true, blendshapes: jitter(neutralFrame()), headAngles: noAngles });
+  assert(rPause.state !== STATES.SHOCKED, `a 15s pause gap does NOT false-confirm SHOCKED on resume (state=${rPause.state})`);
+
+  log("");
+  log("=== SECTION 7: LOCKED_IN / DEAD_INSIDE / SHOCKED-interrupts (regression) ===");
+  const engine2 = freshEngine(baseline);
   let lockedHit = false, r2, iters = 0;
   for (let i = 0; i < 400; i++) {
     r2 = engine2.update({ present: true, blendshapes: jitter(neutralFrame(), 0.003), headAngles: { roll: 0.001 * (i % 3), pitch: 0, yaw: 0 } });
@@ -130,44 +271,87 @@ async function run() {
     iters++;
     if (r2.state === STATES.LOCKED_IN) { lockedHit = true; break; }
   }
-  log(`LOCKED_IN test: reached=${lockedHit} state=${r2.state} confidence=${r2.confidence.toFixed(2)} frames=${iters} (~${(iters*FRAME_MS).toFixed(0)}ms)`);
+  assert(lockedHit, `LOCKED_IN reached after ${(iters*FRAME_MS/1000).toFixed(1)}s of genuine stillness`);
 
-  // ---- 8. LOCKED_IN should NOT fire before session eligibility window ----
-  const engine3 = new StateEngine(baseline);
-  engine3.beginSession(); // session just started (0ms old)
-  let lockedTooEarly = false, r3;
-  for (let i = 0; i < 400; i++) {
-    r3 = engine3.update({ present: true, blendshapes: jitter(neutralFrame(), 0.003), headAngles: { roll: 0, pitch: 0, yaw: 0 } });
-    tick(FRAME_MS);
-    if (r3.state === STATES.LOCKED_IN) { lockedTooEarly = true; break; }
-    if (fakeNow - engine3.sessionStartAt > 6000) break; // only need to check within LOCKED_IN's own min-duration window
-  }
-  log(`LOCKED_IN too-early check (within its own 5s window, session <15s old): firedTooEarly=${lockedTooEarly} finalState=${r3.state}`);
-
-  // ---- 9. DEAD_INSIDE: even longer, even lower activity ----
-  const engine4 = new StateEngine(baseline);
-  engine4.beginSession();
-  tick(20000);
-  let deadHit = false, r4, iters4 = 0;
-  for (let i = 0; i < 700; i++) {
-    r4 = engine4.update({ present: true, blendshapes: jitter(neutralFrame(), 0.0005), headAngles: { roll: 0, pitch: 0, yaw: 0 } });
-    tick(FRAME_MS);
-    iters4++;
-    if (r4.state === STATES.DEAD_INSIDE) { deadHit = true; break; }
-  }
-  log(`DEAD_INSIDE test: reached=${deadHit} state=${r4.state} confidence=${r4.confidence.toFixed(2)} frames=${iters4} (~${(iters4*FRAME_MS).toFixed(0)}ms)`);
-
-  // ---- 10. SHOCKED interrupts LOCKED_IN ----
   let interrupted = false, r5;
   for (let i = 0; i < 10; i++) {
-    r5 = engine2.update({ present: true, blendshapes: jitter(neutralFrame({ eyeWideLeft: 0.9, eyeWideRight: 0.9, jawOpen: 0.8 })), headAngles: { roll: 0, pitch: 0, yaw: 0 } });
+    r5 = engine2.update({ present: true, blendshapes: jitter(neutralFrame({ eyeWideLeft: 0.9, eyeWideRight: 0.9, jawOpen: 0.8 })), headAngles: noAngles });
     tick(FRAME_MS);
     if (r5.state === STATES.SHOCKED) { interrupted = true; break; }
   }
-  log(`SHOCKED interrupts LOCKED_IN: wasLockedIn=${lockedHit} interrupted=${interrupted} postState=${r5.state}`);
+  assert(interrupted, "SHOCKED still correctly interrupts an active LOCKED_IN");
 
-  document.getElementById("out").textContent = results.join("\n");
-  console.log("TEST_HARNESS_RESULTS\n" + results.join("\n"));
+  const engine3 = freshEngine(baseline);
+  engine3.sessionStartAt = performance.now(); // override: session just started (0ms old), NOT past the eligibility gate
+  let lockedTooEarly = false, r3;
+  for (let i = 0; i < 80; i++) { // ~6.6s, within LOCKED_IN's own 5s window
+    r3 = engine3.update({ present: true, blendshapes: jitter(neutralFrame(), 0.003), headAngles: noAngles });
+    tick(FRAME_MS);
+    if (r3.state === STATES.LOCKED_IN) { lockedTooEarly = true; break; }
+  }
+  assert(!lockedTooEarly, "LOCKED_IN does NOT fire before the post-calibration session-eligibility window, even with perfect stillness");
+
+  log("");
+  log("=== SECTION 8: SHOCKED alt-path (brow raise) fires without eyeWide, and rejects solo talking ===");
+  const engineAlt = freshEngine(baseline);
+  let altHit = false, rAlt;
+  // Mirrors the real report: browInnerUp strongly up, eyeWide basically at
+  // neutral, only a small jawOpen bump -- the primary weighted score alone
+  // (as originally implemented) could not cross 0.5 from this pattern.
+  for (let i = 0; i < 15; i++) {
+    rAlt = engineAlt.update({ present: true, blendshapes: jitter(neutralFrame({ browInnerUp: 0.4, eyeWideLeft: 0.02, eyeWideRight: 0.03, jawOpen: 0.1 })), headAngles: noAngles });
+    tick(FRAME_MS);
+    if (rAlt.state === STATES.SHOCKED) { altHit = true; break; }
+  }
+  assert(altHit, "SHOCKED fires via the brow-raise alt-path when eyeWide barely moves (matches real phone report)");
+
+  const engineTalk = freshEngine(baseline);
+  let talkFalsePositive = false, rTalk;
+  for (let i = 0; i < 40; i++) {
+    rTalk = engineTalk.update({ present: true, blendshapes: jitter(neutralFrame({ jawOpen: 0.35 })), headAngles: noAngles }); // solo jaw movement, e.g. talking
+    tick(FRAME_MS);
+    if (rTalk.state === STATES.SHOCKED) talkFalsePositive = true;
+  }
+  assert(!talkFalsePositive, "solo jawOpen movement (e.g. talking) alone does NOT qualify via the alt-path");
+
+  log("");
+  log("=== SECTION 9: personalizeWeights() unit checks ===");
+  const w1 = personalizeWeights({ a: 0.5, b: 0.3, c: 0.2 }, { a: 1, b: 1 }, { minRetention: 0.15, salienceCap: 3 });
+  assert(Math.abs(w1.c - 0.2) < 1e-9, "an uncovered term (not in salienceByTerm) is left byte-identical");
+  assert(Math.abs((w1.a + w1.b + w1.c) - 1.0) < 1e-9, "total weight budget is exactly conserved after redistribution");
+  const w2 = personalizeWeights({ a: 0.5, b: 0.5 }, { a: 1, b: 1 }, { minRetention: 0.15, salienceCap: 3 });
+  assert(Math.abs(w2.a - 0.5) < 1e-9 && Math.abs(w2.b - 0.5) < 1e-9, "equal salience across covered terms leaves weights unchanged");
+
+
+  log("=== Review regressions: session restart and pause ===");
+  const reviewed = freshEngine(baseline);
+  tick(700);
+  const beforePause = reviewed.sessionActiveMs;
+  reviewed.pause();
+  tick(15000);
+  assert(reviewed.sessionActiveMs === beforePause, "paused session clock excludes wall time immediately");
+  reviewed.resume();
+  assert(reviewed.sessionActiveMs === beforePause, "resume preserves accumulated active time");
+  reviewed.fastEma = { jawOpen: 0.9 };
+  reviewed.slowEma = { jawOpen: 0.9 };
+  reviewed.pause();
+  tick(3000);
+  reviewed.beginSession();
+  assert(Object.keys(reviewed.fastEma).length === 0 && Object.keys(reviewed.slowEma).length === 0, "fresh neutral session discards previous expression smoothing");
+  assert(reviewed.sessionActiveMs === 0 && reviewed._pauseStartedAt === null, "new session has no stale pause timestamp");
+  reviewed.gates.SHOCKED.aboveSince = performance.now();
+  reviewed.pause();
+  assert(reviewed.gates.SHOCKED.aboveSince === null, "pause itself clears pending expression evidence");
+
+  document.getElementById("out").textContent = results.join("\n") + `\n\n${pass} passed, ${fail} failed.`;
+  console.log("TEST_HARNESS_RESULTS\n" + results.join("\n") + `\n\n${pass} passed, ${fail} failed.`);
+}
+
+function avgBand(baseline, names) {
+  return names.reduce((s, n) => s + baseline.band(n), 0) / names.length;
+}
+function avgMean(baseline, names) {
+  return names.reduce((s, n) => s + baseline.getMean(n), 0) / names.length;
 }
 
 run().catch((e) => {

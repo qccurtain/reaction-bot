@@ -3,12 +3,19 @@
 // user holds a neutral face, then exposes mean/std per signal so the state
 // engine can compare "current" against "this person's normal" rather than
 // a fixed absolute threshold.
+//
+// Also reused (with shorter duration/minSamples) as a generic sample burst
+// collector for optional expression calibration -- see
+// expressionCalibration.js. The mean/std/band machinery is identical; only
+// how long we collect for and what the samples mean differs.
 // ============================================================================
 
 import { CONFIG } from "./config.js";
 
 export class BaselineCollector {
-  constructor() {
+  constructor({ durationMs, minSamples } = {}) {
+    this.durationMs = durationMs ?? CONFIG.calibration.durationMs;
+    this.minSamples = minSamples ?? CONFIG.calibration.minSamples;
     this.reset();
   }
 
@@ -28,7 +35,7 @@ export class BaselineCollector {
   get progress() {
     if (!this.startedAt) return 0;
     const elapsed = performance.now() - this.startedAt;
-    return Math.max(0, Math.min(1, elapsed / CONFIG.calibration.durationMs));
+    return Math.max(0, Math.min(1, elapsed / this.durationMs));
   }
 
   get elapsedMs() {
@@ -41,8 +48,8 @@ export class BaselineCollector {
   addSample(blendshapes) {
     if (this.done) return true;
     this.samples.push(blendshapes);
-    const timeUp = this.elapsedMs >= CONFIG.calibration.durationMs;
-    const enoughSamples = this.samples.length >= CONFIG.calibration.minSamples;
+    const timeUp = this.elapsedMs >= this.durationMs;
+    const enoughSamples = this.samples.length >= this.minSamples;
     if (timeUp && enoughSamples) {
       this._computeStats();
       this.done = true;
@@ -69,7 +76,12 @@ export class BaselineCollector {
     }
   }
 
-  _band(name) {
+  // Public: the noise-band width for a signal, i.e. how much this person's
+  // OWN neutral-hold data jittered (floored so a near-zero-variance signal
+  // still gets a sane minimum). Used both by significance() below and by
+  // expressionCalibration.js as the "generic expected amplitude" reference
+  // for a full-strength expression.
+  band(name) {
     const floor = CONFIG.calibration.minNoiseBand[name] ?? CONFIG.calibration.minNoiseBand.default;
     const std = this.std[name] ?? 0;
     return Math.max(floor, std * CONFIG.calibration.bandStdMultiplier);
@@ -85,8 +97,7 @@ export class BaselineCollector {
   // main normalized unit state-scoring functions consume.
   significance(name, rawValue) {
     const d = this.delta(name, rawValue);
-    const band = this._band(name);
-    return Math.max(0, Math.min(1, d / band));
+    return Math.max(0, Math.min(1, d / this.band(name)));
   }
 
   getMean(name) {

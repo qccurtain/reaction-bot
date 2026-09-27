@@ -14,10 +14,16 @@ export const dom = {
   calibrationText: el("calibrationText"),
   btnStart: el("btnStart"),
   btnRecalibrate: el("btnRecalibrate"),
+  btnPersonalize: el("btnPersonalize"),
   btnPause: el("btnPause"),
   btnResume: el("btnResume"),
   btnDebug: el("btnDebug"),
   btnReset: el("btnReset"),
+  exprFlow: el("exprFlow"),
+  exprFlowText: el("exprFlowText"),
+  btnExprA: el("btnExprA"),
+  btnExprB: el("btnExprB"),
+  btnExprC: el("btnExprC"),
   debugPanel: el("debugPanel"),
   dbgFps: el("dbgFps"),
   dbgFace: el("dbgFace"),
@@ -57,12 +63,36 @@ export function setStateDisplay(stateName, confidence) {
 export function setButtons({ started, calibrating, paused }) {
   dom.btnStart.disabled = started;
   dom.btnStart.textContent = started ? "Camera Running" : "Start Camera";
-  dom.btnRecalibrate.disabled = !started || calibrating;
+  dom.btnRecalibrate.disabled = !started || calibrating || paused;
+  dom.btnPersonalize.disabled = !started || calibrating || paused;
   dom.btnPause.hidden = paused;
   dom.btnPause.disabled = !started || calibrating;
   dom.btnResume.hidden = !paused;
   dom.btnResume.disabled = !started;
   dom.btnReset.disabled = !started;
+}
+
+// ---- optional expression-calibration flow panel ----
+// A single small panel with up to 3 buttons whose label/purpose changes per
+// step (offer / capturing / rejected), driven entirely by main.js. Kept
+// generic here so ui.js stays pure rendering.
+export function showExprFlow({ text, buttons }) {
+  dom.exprFlow.hidden = false;
+  dom.exprFlowText.textContent = text;
+  const specs = [dom.btnExprA, dom.btnExprB, dom.btnExprC];
+  specs.forEach((btn, i) => {
+    const spec = buttons[i];
+    if (!spec) {
+      btn.hidden = true;
+      return;
+    }
+    btn.hidden = false;
+    btn.textContent = spec.label;
+  });
+}
+
+export function hideExprFlow() {
+  dom.exprFlow.hidden = true;
 }
 
 export function toggleDebugPanel(forceShow) {
@@ -98,9 +128,12 @@ const BLENDSHAPE_DEBUG_KEYS = [
 export function renderDebug(result) {
   dom.dbgFps.textContent = result.fps ? result.fps.toFixed(1) : "--";
   dom.dbgFace.textContent = result.present ? "yes" : "no";
-  dom.dbgCandidate.textContent = result.candidate ?? "--";
-  const cand = result.candidateDurations?.[result.state];
-  dom.dbgCandidateDur.textContent = cand != null ? fmtMs(cand) : "--";
+  const target = result.candidateTargetMs;
+  const candLabel = result.candidateState ?? "NEUTRAL";
+  dom.dbgCandidate.textContent = candLabel === "NEUTRAL" ? "(none)" : candLabel;
+  const dur = result.candidateDurationMs ?? 0;
+  dom.dbgCandidateDur.textContent =
+    candLabel === "NEUTRAL" ? "--" : `${fmtMs(dur)}${target ? ` / ${fmtMs(target)}` : ""}`;
   dom.dbgActiveDur.textContent = fmtMs(result.activeDurationMs ?? 0);
   dom.dbgSession.textContent = fmtMs(result.sessionActiveMs ?? 0);
   dom.dbgActivity.textContent = (result.activity ?? 0).toFixed(3);
@@ -130,9 +163,13 @@ export function renderInspect(breakdown) {
 export function onButtons(handlers) {
   dom.btnStart.addEventListener("click", handlers.onStart);
   dom.btnRecalibrate.addEventListener("click", handlers.onRecalibrate);
+  dom.btnPersonalize.addEventListener("click", handlers.onPersonalize);
   dom.btnPause.addEventListener("click", handlers.onPause);
   dom.btnResume.addEventListener("click", handlers.onResume);
   dom.btnDebug.addEventListener("click", handlers.onToggleDebug);
   dom.btnReset.addEventListener("click", handlers.onReset);
+  dom.btnExprA.addEventListener("click", () => handlers.onExprButton("A"));
+  dom.btnExprB.addEventListener("click", () => handlers.onExprButton("B"));
+  dom.btnExprC.addEventListener("click", () => handlers.onExprButton("C"));
   dom.stateChips.forEach((chip) => chip.addEventListener("click", () => handlers.onInspect(chip.dataset.state)));
 }

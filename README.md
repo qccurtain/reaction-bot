@@ -14,17 +14,18 @@ to drive believable meme states?*
 
 ```
 reaction-bot/
-├── index.html            # UI shell (camera preview, state display, debug panel)
-├── styles.css            # dark mobile-first styling
+├── index.html                  # UI shell (camera preview, state display, debug panel)
+├── styles.css                  # dark mobile-first styling
 ├── src/
-│   ├── config.js         # ALL tunable thresholds/durations live here
-│   ├── camera.js         # getUserMedia front camera, nothing else
-│   ├── faceTracker.js    # MediaPipe FaceLandmarker wrapper + throttled loop
-│   ├── baseline.js       # 10s neutral calibration, per-signal mean/std
-│   ├── stateEngine.js    # normalize -> smooth -> candidate -> persistence -> state
-│   ├── ui.js             # DOM rendering only, no logic
-│   └── main.js           # wires everything together, app lifecycle
-└── test-harness.html     # dev-only synthetic logic test (see §11)
+│   ├── config.js                # ALL tunable thresholds/durations live here
+│   ├── camera.js                 # getUserMedia front camera, nothing else
+│   ├── faceTracker.js            # MediaPipe FaceLandmarker wrapper + throttled loop
+│   ├── baseline.js               # 10s neutral calibration, per-signal mean/std
+│   ├── expressionCalibration.js  # OPTIONAL personal expression calibration (v0.2)
+│   ├── stateEngine.js            # normalize -> smooth -> candidate -> persistence -> state
+│   ├── ui.js                     # DOM rendering only, no logic
+│   └── main.js                   # wires everything together, app lifecycle + calibration flow
+└── test-harness.html            # dev-only synthetic regression tests (see §12)
 ```
 
 No bundler, no framework, no build step. Everything is a plain ES module
@@ -89,7 +90,77 @@ Netlify, Vercel) since there's zero backend.
 5. Tap **Show Debug** to see live blendshape numbers while you make faces —
    this is the main tool for tuning thresholds in `config.js`.
 
-## 6. Browser compatibility notes
+## 6. Optional personal expression calibration (v0.2)
+
+Real phone testing showed the original single-neutral-baseline design needed
+very exaggerated expressions to trigger TILTED/CONFUSED, and that SHOCKED's
+`eyeWide` blendshape barely moves for some people even on a genuine
+surprised reaction. Two fixes landed for this, both **additive** — skip them
+entirely and the original default scoring is untouched, byte-for-byte:
+
+**1. SHOCKED alt-path (always on, no calibration needed).** A meaningful
+brow raise (`browInnerUp`) plus at least one supporting change (eye widen,
+jaw drop, or a sudden-change spike) now also qualifies as SHOCKED,
+independent of the primary weighted score. This directly matches the report
+that a real surprised reaction moved `browInnerUp` a lot and `eyeWide`
+almost not at all. Solo jaw movement (e.g. talking) still doesn't qualify,
+since it never raises the brow. See `config.js` → `states.SHOCKED.altPath`.
+
+**2. Optional per-expression calibration (opt-in, after neutral).** After
+the 10s neutral calibration, the user is asked (skippable) to briefly make a
+natural SURPRISE / SMILE / FROWN. Each capture:
+- Runs through `src/expressionCalibration.js`, reusing the same
+  `BaselineCollector` machinery as neutral (just a shorter ~2.5s window).
+- Is **rejected** (with a Retry/Skip/Cancel prompt) if it doesn't separate
+  meaningfully from the person's own neutral baseline on ANY of that
+  expression's signals — a flat/indistinguishable attempt is never silently
+  accepted as "their strong expression."
+- If accepted, **redistributes that state's scoring weight** toward
+  whichever signal(s) *that specific person* demonstrably moves, away from
+  ones they don't — while conserving the exact same total weight budget, so
+  the enter/exit thresholds stay meaningful (this is `personalizeWeights()`
+  in `expressionCalibration.js`). It also personalizes the normalization
+  band per signal so reaching ~80% of *their own* calibrated peak reads as
+  fully significant.
+
+**Why this design, not just "lower the threshold":** the real failure mode
+wasn't noise — it was that TILTED/CONFUSED's weighted-sum formulas require
+several signals to move in agreement, and a real posed attempt often only
+convincingly moves one or two. Globally lowering the threshold would fix
+that person at the cost of raising false positives for everyone else.
+Reweighting toward *that person's own demonstrated* signals fixes it without
+touching the shared default thresholds at all.
+
+**Trade-offs / what this does NOT do:**
+- It's still a heuristic, not a classifier — it reweights among the SAME
+  fixed feature set, it doesn't learn a new decision boundary.
+- `CONFUSED` has no calibration profile (asymmetry can't usefully be
+  "posed" the same way) and remains default-only/experimental.
+- One noisy calibration burst can only shift so much: `minRetention` (0.15)
+  keeps every signal at least partially alive so a fluke zero-movement
+  capture can't permanently zero a channel — but this also means
+  personalization won't always be enough to cross a conservative threshold
+  by itself. See the regression tests in §12 for a case where it
+  provably helps (crosses a threshold the default formula structurally
+  cannot) versus the real anecdotal report, which may need `config.js`
+  tuning on top.
+- **Nothing here is persisted.** Calibration profiles live only in the
+  `ExpressionCalibrator` instance in page memory; reloading the page or
+  closing the tab discards them (matches "no camera frame or calibration
+  data is uploaded or saved").
+
+**Also fixed alongside this:** the debug panel's "Candidate state" used to
+just echo whatever was already confirmed/active, which was useless for
+tuning. It now shows the real leading contender — including one that's
+still mid-way through its persistence timer and hasn't confirmed yet — with
+its own progress (`1.2s / 2.0s`), separately from the big confirmed `state`
+display. And a stale-timer bug was fixed: face-loss, Pause, and
+(re)calibration all now clear each state's in-progress accumulation timer
+(`StateEngine.freezeGates()`) before frames resume, so a multi-second gap
+can no longer cause an instant false-confirm the moment tracking picks back
+up.
+
+## 7. Browser compatibility notes
 
 - Requires WebAssembly + `getUserMedia` + ES modules — every current mobile
   Safari/Chrome/Edge/Firefox supports all three.
@@ -102,7 +173,7 @@ Netlify, Vercel) since there's zero backend.
   webview that blocks camera permissions (e.g. some social-media in-app
   browsers) — open it in actual Safari/Chrome if a link preview fails.
 
-## 7. Known limitations
+## 8. Known limitations
 
 - **Head-pose angles are approximate.** `faceTracker.js` decomposes the
   facial transformation matrix into rough roll/pitch/yaw — good enough as a
@@ -112,7 +183,7 @@ Netlify, Vercel) since there's zero backend.
   backlit rooms degrade blendshape quality before they degrade the state
   logic.
 - **CONFUSED and DEAD_INSIDE are the least reliable states** by design — see
-  §10.
+  §11.
 - The activity meter that gates `LOCKED_IN`/`DEAD_INSIDE` combines
   frame-to-frame movement AND deviation-from-baseline (so a frozen non-
   neutral face — e.g. a held scowl — doesn't get miscounted as "zoned out
@@ -121,7 +192,7 @@ Netlify, Vercel) since there's zero backend.
   `activity.weights` / `states.LOCKED_IN` / `states.DEAD_INSIDE` after
   watching the debug panel on a real phone.
 
-## 8. How the heuristic state logic works
+## 9. How the heuristic state logic works
 
 Pipeline (`stateEngine.js`), run once per inference frame:
 
@@ -155,7 +226,7 @@ None of this claims to detect real emotions — it labels **visible facial
 configurations** (wide eyes + open jaw = "SHOCKED"), the same way a caption
 generator would.
 
-## 9. Where thresholds/durations live
+## 10. Where thresholds/durations live
 
 Everything is in **`src/config.js`**, one object:
 
@@ -173,7 +244,7 @@ cheekSquint + laugh bonus"), but every number that formula depends on is a
 lookup into `CONFIG`, not a literal. Retuning is edit-`config.js`-only for
 every case except changing which signals a state listens to at all.
 
-## 10. Which states are solid vs. fragile
+## 11. Which states are solid vs. fragile
 
 **Technically straightforward / worked immediately in synthetic testing:**
 - `SHOCKED` — wide eyes + jaw drop is a big, fast, unambiguous blendshape
@@ -199,21 +270,53 @@ every case except changing which signals a state listens to at all.
   threshold + longer duration on the same underlying signal. In practice
   these two will likely need the most manual retuning of any pair here.
 
-## 11. Dev-only synthetic test harness
+## 12. Dev-only synthetic test harness
 
 `test-harness.html` (not linked from `index.html`, not part of the shipped
 app) feeds fabricated blendshape sequences through `baseline.js` +
-`stateEngine.js` with a mocked clock, to sanity-check the state machine
-without a camera. Open it the same way (`http://localhost:8765/test-harness.html`)
-to re-run it after changing `config.js`. It currently checks: SHOCKED fires
-fast and decays fast, HAPPY/TILTED/CONFUSED fire within their spec'd
-windows, CONFUSED doesn't false-positive on mild asymmetry, LOCKED_IN
-respects the session-eligibility gate, DEAD_INSIDE requires longer/lower
-activity than LOCKED_IN, and SHOCKED correctly interrupts LOCKED_IN. This
-does **not** replace real-phone testing — it only proves the state-machine
-wiring is internally consistent.
+`expressionCalibration.js` + `stateEngine.js` with a mocked clock (so it runs
+instantly, with no real waiting), to sanity-check the state machine and the
+personalization logic without a camera. Open it the same way
+(`http://localhost:<port>/test-harness.html`, using whatever port your local
+server is on) to re-run it after changing `config.js`; it prints real
+`PASS`/`FAIL` lines per assertion plus a final tally, not just descriptive
+logs. **This does NOT replace real-phone testing** — it only proves the
+state-machine and personalization wiring behave the way they're designed to
+on synthetic input; it says nothing about whether MediaPipe's real blendshape
+output on a real face will actually reach these numbers.
 
-## 12. What to record manually during phone testing
+It currently checks (9 sections, 33 assertions as of this write-up):
+1. **Default path unaffected** — SHOCKED/HAPPY/TILTED/DEAD_INSIDE all still
+   fire and decay within their spec'd windows with calibration skipped
+   entirely (byte-for-byte the original formulas).
+2. **Calibration rejection** — a burst indistinguishable from neutral is
+   rejected, and a rejected result never gets treated as calibrated even if
+   `commit()` is called on it.
+3. **Calibration measurably helps a real shortfall** — a controlled 2-of-4
+   -signal TILTED attempt that the DEFAULT formula can structurally never
+   cross (max achievable score is below the enter threshold even at full
+   signal strength) DOES cross once that person's own calibration data
+   redistributes weight toward the two channels they actually use.
+4. **High resting/neutral values don't false-trigger** — a person whose
+   resting `eyeSquint` is 0.29 (not near 0) sitting at their own neutral
+   does not read as TILTED.
+5. **Candidate vs. confirmed state are distinct** — a state's `candidateState`
+   (and its live progress toward `minDurationMs`) shows up WHILE it's still
+   accumulating evidence, before `state` (the confirmed/displayed state)
+   changes — this is the fix for the "candidate always equals state" bug.
+6. **Stale timers don't survive gaps** — a face-loss dropout and a
+   `freezeGates()` call (what happens around a Pause/recalibration) both
+   correctly discard in-progress evidence, so a multi-second gap can't
+   instantly false-confirm the moment tracking resumes.
+7. **LOCKED_IN/DEAD_INSIDE/interrupt regression** — unchanged from the
+   original v0.1 suite.
+8. **SHOCKED alt-path** — fires on brow-raise-without-eyeWide (matching the
+   real phone report), and does NOT fire on solo jaw movement (talking).
+9. **`personalizeWeights()` unit checks** — uncovered terms are left
+   byte-identical, total weight budget is exactly conserved, equal salience
+   leaves weights unchanged.
+
+## 13. What to record manually during phone testing
 
 For each attempt, note: the state shown, the confidence %, and the debug
 blendshape values, so thresholds can be adjusted from real numbers instead
@@ -234,6 +337,19 @@ Specifically worth capturing:
 - False positives during normal talking/eating/adjusting glasses — these
   are the most likely real-world flicker sources not covered by the
   synthetic tests.
+- **New in v0.2**: with the optional expression calibration completed, does
+  TILTED/SHOCKED actually cross now on the same expressions that previously
+  failed? Try the SAME exaggeration level you used in earlier testing (don't
+  compensate by making it even more exaggerated) — the point is checking
+  whether personalization closed the gap on its own.
+- Try a **deliberately weak/lazy** attempt during expression calibration
+  (barely move your face) and confirm you get the "couldn't tell that apart
+  from neutral" rejection prompt, not a silently-accepted weak profile.
+- Try **Recalibrate Neutral** and confirm any previously-calibrated
+  expression profiles are cleared (offered again, not silently reused
+  against a new baseline) — and that **Pause → Resume** and a brief
+  face-loss (look away for a few seconds) don't cause an instant/incorrect
+  state the moment you look back.
 
 ## Privacy
 
@@ -242,3 +358,7 @@ Face processing runs 100% locally in the browser via WASM. The camera
 frame-by-frame by the on-device model (`faceTracker.js`) — no frame is ever
 drawn to a canvas for export, written to disk, or sent over the network. No
 analytics, no remote face-recognition service, no paid API.
+
+
+### Review corrections (v0.2)
+Personal bands are floored by the neutral noise band and can reduce sensitivity; weight redistribution provides the personalization gain. Skipping personalization retains default weights, but the new surprise alternate path still applies. Re-personalizing clears all old profiles. Session restart clears smoothing and timers; pause excludes elapsed time and clears pending evidence. Synthetic results are not phone validation.

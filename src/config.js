@@ -112,6 +112,18 @@ export const CONFIG = {
         browInnerUp: 0.16,
         suddenChange: 0.2, // fast-EMA vs slow-EMA jump on eyeWide/jawOpen
       },
+      // Real-world observation: many people's eyeWide blendshape barely
+      // moves even on a genuine surprised reaction, while browInnerUp
+      // (eyebrow raise) is a much more reliable "surprise" tell. This is a
+      // second, independent qualifying path (OR'd with the primary weighted
+      // score above): a meaningful brow raise PLUS at least one supporting
+      // change (eye widen, jaw drop, or a sudden-change spike) also counts
+      // as SHOCKED. Requiring the second signal keeps this from firing on
+      // solo jaw movement (talking/chewing) alone.
+      altPath: {
+        browThreshold: 0.6,
+        supportThreshold: 0.3,
+      },
     },
 
     HAPPY: {
@@ -166,5 +178,90 @@ export const CONFIG = {
       minDurationMs: 8500, // spec: ~7-10s, and must exceed LOCKED_IN's window
       activityThreshold: 0.06, // stricter (lower) than LOCKED_IN's
     },
+  },
+};
+
+// ============================================================================
+// Optional personal expression calibration (SHOCKED/HAPPY/TILTED only).
+//
+// This is an OPT-IN layer on top of everything above. When the user skips it
+// (or a given profile), that state's scoring uses the exact default weights
+// and generic neutral-noise banding from CONFIG.states -- nothing here
+// changes unless the user explicitly records a profile. See
+// expressionCalibration.js for how these are applied.
+// ============================================================================
+
+// Maps a state's per-signal "term" (as used in that state's `weights` object)
+// to the raw MediaPipe blendshape category name(s) that make it up. A term
+// with two names is the avg(left, right) pattern already used in
+// stateEngine.js scoring.
+export const TERM_SIGNALS = {
+  eyeWideLeft: ["eyeWideLeft"],
+  eyeWideRight: ["eyeWideRight"],
+  jawOpen: ["jawOpen"],
+  browInnerUp: ["browInnerUp"],
+  smile: ["mouthSmileLeft", "mouthSmileRight"],
+  cheekSquint: ["cheekSquintLeft", "cheekSquintRight"],
+  browDown: ["browDownLeft", "browDownRight"],
+  eyeSquint: ["eyeSquintLeft", "eyeSquintRight"],
+  mouthPress: ["mouthPressLeft", "mouthPressRight"],
+  mouthFrown: ["mouthFrownLeft", "mouthFrownRight"],
+};
+
+// Which terms each optional calibration profile samples, and which state it
+// personalizes. Deliberately only 3 profiles (matching "natural
+// smile/surprise/frown") -- CONFUSED has no calibration profile and always
+// uses its default (asymmetry-based) scoring, since asymmetry isn't
+// something a single posed expression can usefully calibrate.
+export const EXPRESSION_PROFILES = {
+  SURPRISE: {
+    state: STATES.SHOCKED,
+    terms: ["eyeWideLeft", "eyeWideRight", "jawOpen", "browInnerUp"],
+    label: "a natural SURPRISED face",
+  },
+  SMILE: {
+    state: STATES.HAPPY,
+    terms: ["smile", "cheekSquint"],
+    label: "a natural SMILE",
+  },
+  FROWN: {
+    state: STATES.TILTED,
+    terms: ["browDown", "eyeSquint", "mouthPress", "mouthFrown"],
+    label: "a natural FROWN / tense face",
+  },
+};
+
+export const STATE_TO_PROFILE = Object.fromEntries(
+  Object.entries(EXPRESSION_PROFILES).map(([profile, def]) => [def.state, profile])
+);
+
+export const EXPRESSION_CALIBRATION = {
+  durationMs: 2500, // shorter than neutral's 10s -- holding an intense
+  // expression for a full 10s is unnatural and tiring.
+  minSamples: 15,
+
+  // A calibration burst is REJECTED (not silently accepted as a weak
+  // expression) unless at least one of its terms separates from the
+  // person's neutral baseline by at least this fraction of the generic
+  // "expected" band for that term. Below this, we genuinely can't tell the
+  // attempt apart from their resting face.
+  rejectSalienceThreshold: 0.5,
+
+  // Personalized banding: sig() reaches 1.0 once the live signal reaches
+  // this fraction of the person's OWN calibrated peak amplitude for that
+  // term, floored by the generic neutral noise band. This cannot amplify
+  // noise by shrinking the neutral band; recognition gains come from weights.
+  bandMargin: 0.8,
+
+  // Weight redistribution: within a calibrated profile's covered terms,
+  // weight shifts toward whichever term(s) that specific person showed the
+  // most separation on (relative to their own strongest term), and away
+  // from ones they barely moved -- while the total weight budget for that
+  // subset of terms is conserved exactly, so the enter/exit thresholds stay
+  // meaningful. minRetention keeps every covered term at least partially
+  // alive so one noisy calibration burst can't permanently zero a channel.
+  reweight: {
+    minRetention: 0.15,
+    salienceCap: 3,
   },
 };

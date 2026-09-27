@@ -3,13 +3,13 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Reaction Bot v0.1</title>
+  <title>Reaction Bot v0.2</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <div id="app">
     <header>
-      <h1>REACTION BOT <span class="ver">v0.1</span></h1>
+      <h1>REACTION BOT <span class="ver">v0.2</span></h1>
       <p class="privacy-note">
         Face processing runs locally on this device. Camera frames are not uploaded or stored.
       </p>
@@ -30,10 +30,20 @@
     <section class="controls">
       <button id="btnStart" class="btn primary">Start Camera</button>
       <button id="btnRecalibrate" class="btn" disabled>Recalibrate Neutral</button>
+      <button id="btnPersonalize" class="btn" disabled>Personalize Expressions</button>
       <button id="btnPause" class="btn" disabled>Pause</button>
       <button id="btnResume" class="btn" disabled hidden>Resume</button>
       <button id="btnDebug" class="btn">Show Debug</button>
       <button id="btnReset" class="btn" disabled>Reset State</button>
+    </section>
+
+    <section id="exprFlow" class="expr-flow" hidden>
+      <p id="exprFlowText" class="expr-flow-text"></p>
+      <div class="expr-flow-buttons">
+        <button id="btnExprA" class="btn primary" hidden></button>
+        <button id="btnExprB" class="btn" hidden></button>
+        <button id="btnExprC" class="btn" hidden></button>
+      </div>
     </section>
 
     <section class="manual-test">
@@ -69,7 +79,7 @@
     </section>
 
     <footer>
-      <p>v0.1 prototype — validating phone-side MediaPipe facial signals. No Twitch integration yet.</p>
+      <p>v0.2 prototype — validating phone-side MediaPipe facial signals. No Twitch integration yet.</p>
     </footer>
   </div>
 
