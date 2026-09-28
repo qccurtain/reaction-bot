@@ -6,7 +6,15 @@
 // ============================================================================
 
 import { startFrontCamera, stopCamera } from "./camera.js";
-import { initFaceLandmarker, startDetectionLoop, stopDetectionLoop } from "./faceTracker.js";
+// Defer the external model library until Start: storage/UI must work even
+// when a CDN is slow or unreachable. Import failures enter onStart's catch.
+let faceTracker;
+async function initFaceLandmarker(onProgress) {
+  faceTracker ??= await import("./faceTracker.js");
+  return faceTracker.initFaceLandmarker(onProgress);
+}
+function startDetectionLoop(...args) { faceTracker.startDetectionLoop(...args); }
+function stopDetectionLoop() { faceTracker?.stopDetectionLoop(); }
 import { BaselineCollector } from "./baseline.js";
 import { ExpressionCalibrator } from "./expressionCalibration.js";
 import { StateEngine } from "./stateEngine.js";
@@ -342,3 +350,4 @@ window.addEventListener("beforeunload", () => {
   stopDetectionLoop();
   stopCamera();
 });
+
