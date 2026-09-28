@@ -308,8 +308,11 @@ export class StateEngine {
     const happyW = ec ? ec.getWeights(STATES.HAPPY, cfg.HAPPY.weights) : cfg.HAPPY.weights;
     const smile = this.termSig("smile", pBand(STATES.HAPPY, "smile"));
     const cheekSquint = this.termSig("cheekSquint", pBand(STATES.HAPPY, "cheekSquint"));
-    const laughBonus = smile > 0.3 ? sig("jawOpen") : 0;
-    const happyScore = happyW.smile * smile + happyW.cheekSquint * cheekSquint + happyW.laughBonus * laughBonus;
+    const smileDelta = avg(...TERM_SIGNALS.smile.map(n => this.baseline.delta(n, this.fastEma[n] ?? 0)));
+    const smileQualifies = smile >= cfg.HAPPY.minSmileEvidence && smileDelta >= cfg.HAPPY.minSmileDelta;
+    // Opening the jaw is not evidence of a smile, even after personalization.
+    const laughBonus = 0;
+    const happyScore = smileQualifies ? happyW.smile * smile + happyW.cheekSquint * cheekSquint : 0;
 
     // TILTED
     const tiltedW = ec ? ec.getWeights(STATES.TILTED, cfg.TILTED.weights) : cfg.TILTED.weights;
@@ -317,8 +320,9 @@ export class StateEngine {
     const eyeSquint = this.termSig("eyeSquint", pBand(STATES.TILTED, "eyeSquint"));
     const mouthPress = this.termSig("mouthPress", pBand(STATES.TILTED, "mouthPress"));
     const mouthFrown = this.termSig("mouthFrown", pBand(STATES.TILTED, "mouthFrown"));
-    const tiltedScore =
-      tiltedW.browDown * browDown + tiltedW.eyeSquint * eyeSquint + tiltedW.mouthPress * mouthPress + tiltedW.mouthFrown * mouthFrown;
+    const tensionQualifies = Math.max(browDown, mouthPress, mouthFrown) >= cfg.TILTED.minTensionEvidence;
+    const tiltedScore = tensionQualifies ?
+      tiltedW.browDown * browDown + tiltedW.eyeSquint * eyeSquint + tiltedW.mouthPress * mouthPress + tiltedW.mouthFrown * mouthFrown : 0;
 
     // CONFUSED (experimental)
     const browAsym = avg(
@@ -473,8 +477,8 @@ export class StateEngine {
         altQualifies: shockedAltQualifies,
         weights: shockedW,
       },
-      HAPPY: { score: happyScore, smile, cheekSquint, laughBonus, weights: happyW },
-      TILTED: { score: tiltedScore, browDown, eyeSquint, mouthPress, mouthFrown, weights: tiltedW },
+      HAPPY: { score: happyScore, smileQualifies, smileDelta, smile, cheekSquint, laughBonus, weights: happyW },
+      TILTED: { score: tiltedScore, tensionQualifies, browDown, eyeSquint, mouthPress, mouthFrown, weights: tiltedW },
       CONFUSED: { score: confusedScore, browAsym, eyeSquintAsym, mouthAsym, headTiltSig },
       LOCKED_IN: { ready: lockedInReady, lowActivityMs: this.lowActivityStart ? now - this.lowActivityStart : 0, eyesOpen, mouthClosed, sessionEligible },
       DEAD_INSIDE: { ready: deadInsideReady, veryLowActivityMs: this.veryLowActivityStart ? now - this.veryLowActivityStart : 0, sessionEligible },

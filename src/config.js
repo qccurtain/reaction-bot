@@ -127,6 +127,8 @@ export const CONFIG = {
     },
 
     HAPPY: {
+      minSmileEvidence: 0.65, // jaw/cheek activity cannot substitute for mouth-corner lift
+      minSmileDelta: 0.035,
       enterThreshold: 0.45,
       exitThreshold: 0.3,
       minDurationMs: 900, // spec: ~700-1200ms
@@ -139,6 +141,7 @@ export const CONFIG = {
     },
 
     TILTED: {
+      minTensionEvidence: 0.6, // require brow/lip tension in addition to the weighted score
       // conservative: false positives worse than misses
       enterThreshold: 0.6,
       exitThreshold: 0.4,
@@ -246,6 +249,7 @@ export const EXPRESSION_CALIBRATION = {
   // "expected" band for that term. Below this, we genuinely can't tell the
   // attempt apart from their resting face.
   rejectSalienceThreshold: 0.5,
+  requiredTermSalience: 0.8, // reject smile/frown samples missing their defining motion
 
   // Personalized banding: sig() reaches 1.0 once the live signal reaches
   // this fraction of the person's OWN calibrated peak amplitude for that

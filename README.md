@@ -362,3 +362,7 @@ analytics, no remote face-recognition service, no paid API.
 
 ### Review corrections (v0.2)
 Personal bands are floored by the neutral noise band and can reduce sensitivity; weight redistribution provides the personalization gain. Skipping personalization retains default weights, but the new surprise alternate path still applies. Re-personalizing clears all old profiles. Session restart clears smoothing and timers; pause excludes elapsed time and clears pending evidence. Synthetic results are not phone validation.
+
+
+### v0.2.1 false-positive guards
+HAPPY now requires mouth-corner lift above neutral; jaw opening contributes no smile score. TILTED requires brow or lip tension, never squint alone. Calibration rejects profiles missing these defining signals and waits for Record before each pose. These stricter guards can miss subtle expressions; skip a rejected profile rather than forcing it. Regression tests cover jaw/weak-smile cross-talk, squint-dominated profiles and genuine smiles/frowns.

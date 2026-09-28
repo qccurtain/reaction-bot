@@ -67,6 +67,16 @@ function offerExpressionCalibration() {
   });
 }
 
+function prepareExprCapture() {
+  appState = "expr_ready";
+  ui.setButtons({ started: true, calibrating: true, paused: false });
+  const profile = EXPRESSION_PROFILES[EXPR_QUEUE[exprIndex]];
+  ui.showExprFlow({
+    text: `(${exprIndex + 1}/${EXPR_QUEUE.length}) Relax first, then make ${profile.label}. Tap Record when ready.`,
+    buttons: [{ label: "Record" }, { label: "Skip this one" }, { label: "Cancel remaining" }],
+  });
+}
+
 function startExprCapture() {
   ui.setButtons({ started: true, calibrating: true, paused: false });
   appState = "expr_capturing";
@@ -90,7 +100,7 @@ function advanceExprQueue() {
   if (exprIndex >= EXPR_QUEUE.length) {
     finishExpressionFlow();
   } else {
-    startExprCapture();
+    prepareExprCapture();
   }
 }
 
@@ -112,7 +122,7 @@ function handleExprBurstDone(profileName) {
     appState = "expr_rejected";
     const profile = EXPRESSION_PROFILES[profileName];
     ui.showExprFlow({
-      text: `Couldn't tell that apart from your neutral face for ${profile.label}. Try making it a bit more clear/exaggerated.`,
+      text: `That sample did not show clear ${profileName === 'SMILE' ? 'mouth-corner lift' : profileName === 'FROWN' ? 'brow or lip tension beyond squinting' : 'surprise signals'}. Relax, then retry naturally, or skip this one.`,
       buttons: [{ label: "Retry" }, { label: "Skip this one" }, { label: "Cancel remaining" }],
     });
   }
@@ -226,7 +236,7 @@ function onPersonalize() {
   leaveRunning();
   exprCalibrator.clearAll();
   exprIndex = 0;
-  startExprCapture();
+  prepareExprCapture();
 }
 
 function onPause() {
@@ -263,9 +273,15 @@ function onInspect(stateName) {
 // slot performs depends on the current sub-state (offer vs capturing vs
 // rejected), matching whatever showExprFlow() most recently rendered there.
 function onExprButton(slot) {
+  if (appState === "expr_ready") {
+    if (slot === "A") startExprCapture();
+    else if (slot === "B") advanceExprQueue();
+    else if (slot === "C") finishExpressionFlow();
+    return;
+  }
   if (appState === "expr_offer") {
     if (slot === "A") {
-      startExprCapture();
+      prepareExprCapture();
     } else if (slot === "B") {
       finishExpressionFlow(); // skip all
     }
@@ -280,7 +296,7 @@ function onExprButton(slot) {
   }
   if (appState === "expr_rejected") {
     if (slot === "A") {
-      startExprCapture(); // retry this profile
+      prepareExprCapture(); // retry this profile
     } else if (slot === "B") {
       advanceExprQueue(); // skip just this one
     } else if (slot === "C") {

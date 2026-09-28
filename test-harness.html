@@ -343,6 +343,36 @@ async function run() {
   reviewed.pause();
   assert(reviewed.gates.SHOCKED.aboveSince === null, "pause itself clears pending expression evidence");
 
+
+  log("=== Personalization false-positive regressions ===");
+  function sampleProfile(cal, profile, values) {
+    const burst = cal.createBurstCollector(); burst.start();
+    for (let i=0;i<40;i++) { burst.addSample(neutralFrame(values)); tick(FRAME_MS); }
+    return cal.evaluateBurst(profile, burst);
+  }
+  function exercise(cal, values, wanted) {
+    const eng = freshEngine(baseline,cal); let hit=false;
+    for(let i=0;i<80;i++) {
+      const res=eng.update({present:true,blendshapes:neutralFrame(values),headAngles:noAngles});
+      tick(FRAME_MS); if(res.state===wanted) hit=true;
+    }
+    return hit;
+  }
+  const eyeOnlyCal = new ExpressionCalibrator(baseline);
+  const eyeOnly = sampleProfile(eyeOnlyCal,"FROWN",{eyeSquintLeft:.13,eyeSquintRight:.13});
+  assert(!eyeOnly.accepted,"squint-only sample cannot teach a frown");
+  // Simulate an old profile as well: runtime guards must remain effective.
+  eyeOnlyCal.commit({...eyeOnly,accepted:true});
+  assert(!exercise(eyeOnlyCal,{eyeSquintLeft:.11,eyeSquintRight:.11},STATES.TILTED),"resting-eye drift cannot trigger TILTED even with squint-dominated weights");
+  const smileCal = new ExpressionCalibrator(baseline);
+  const smileEval=sampleProfile(smileCal,"SMILE",{mouthSmileLeft:.10,mouthSmileRight:.10});
+  assert(smileEval.accepted,"clear mouth-corner smile sample is accepted"); smileCal.commit(smileEval);
+  assert(!exercise(smileCal,{jawOpen:.5,mouthSmileLeft:.052,mouthSmileRight:.052},STATES.HAPPY),"jaw opening with weak correlated smile signal cannot trigger HAPPY");
+  assert(exercise(smileCal,{mouthSmileLeft:.10,mouthSmileRight:.10},STATES.HAPPY),"closed-mouth calibrated smile still triggers HAPPY");
+  assert(exercise(smileCal,{jawOpen:.5,mouthSmileLeft:.10,mouthSmileRight:.10},STATES.HAPPY),"open-mouth genuine smile still triggers HAPPY");
+  const cheekOnly=sampleProfile(smileCal,"SMILE",{cheekSquintLeft:.3,cheekSquintRight:.3});
+  assert(!cheekOnly.accepted,"cheek-only sample without smiling mouth corners is rejected");
+
   document.getElementById("out").textContent = results.join("\n") + `\n\n${pass} passed, ${fail} failed.`;
   console.log("TEST_HARNESS_RESULTS\n" + results.join("\n") + `\n\n${pass} passed, ${fail} failed.`);
 }

@@ -84,7 +84,13 @@ export class ExpressionCalibrator {
       maxSalience = Math.max(maxSalience, salience);
     }
 
-    const accepted = maxSalience >= EXPRESSION_CALIBRATION.rejectSalienceThreshold;
+    const required = EXPRESSION_CALIBRATION.requiredTermSalience;
+    const definingMotion = profileName === "SMILE"
+      ? (salienceByTerm.smile ?? 0) >= required
+      : profileName === "FROWN"
+        ? Math.max(salienceByTerm.browDown ?? 0, salienceByTerm.mouthPress ?? 0, salienceByTerm.mouthFrown ?? 0) >= required
+        : true;
+    const accepted = definingMotion && maxSalience >= EXPRESSION_CALIBRATION.rejectSalienceThreshold;
     return { profileName, accepted, maxSalience, ampByTerm, salienceByTerm };
   }
 
