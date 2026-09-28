@@ -5,22 +5,22 @@
 // blendshape scores (never pixels) flow into the rest of the app.
 // ============================================================================
 
-import { startFrontCamera, stopCamera } from "./camera.js";
+import { startFrontCamera, stopCamera } from "./camera.js?v=0.2.2-1";
 // Defer the external model library until Start: storage/UI must work even
 // when a CDN is slow or unreachable. Import failures enter onStart's catch.
 let faceTracker;
 async function initFaceLandmarker(onProgress) {
-  faceTracker ??= await import("./faceTracker.js");
+  faceTracker ??= await import("./faceTracker.js?v=0.2.2-1");
   return faceTracker.initFaceLandmarker(onProgress);
 }
 function startDetectionLoop(...args) { faceTracker.startDetectionLoop(...args); }
 function stopDetectionLoop() { faceTracker?.stopDetectionLoop(); }
-import { BaselineCollector } from "./baseline.js";
-import { ExpressionCalibrator } from "./expressionCalibration.js";
-import { StateEngine } from "./stateEngine.js";
-import { EXPRESSION_PROFILES } from "./config.js";
-import * as ui from "./ui.js";
-import { readCalibration, restoreCalibration, saveCalibration, clearCalibration } from "./calibrationStorage.js";
+import { BaselineCollector } from "./baseline.js?v=0.2.2-1";
+import { ExpressionCalibrator } from "./expressionCalibration.js?v=0.2.2-1";
+import { StateEngine } from "./stateEngine.js?v=0.2.2-1";
+import { EXPRESSION_PROFILES } from "./config.js?v=0.2.2-1";
+import * as ui from "./ui.js?v=0.2.2-1";
+import { readCalibration, restoreCalibration, saveCalibration, clearCalibration } from "./calibrationStorage.js?v=0.2.2-1";
 
 const baseline = new BaselineCollector();
 const exprCalibrator = new ExpressionCalibrator(baseline);
@@ -350,4 +350,3 @@ window.addEventListener("beforeunload", () => {
   stopDetectionLoop();
   stopCamera();
 });
-

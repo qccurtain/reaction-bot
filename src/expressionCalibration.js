@@ -12,8 +12,8 @@
 // locally for reuse, at the user's request. Nothing is sent to a server.
 // ============================================================================
 
-import { EXPRESSION_PROFILES, EXPRESSION_CALIBRATION, TERM_SIGNALS, STATE_TO_PROFILE } from "./config.js";
-import { BaselineCollector } from "./baseline.js";
+import { EXPRESSION_PROFILES, EXPRESSION_CALIBRATION, TERM_SIGNALS, STATE_TO_PROFILE } from "./config.js?v=0.2.2-1";
+import { BaselineCollector } from "./baseline.js?v=0.2.2-1";
 
 function avgOf(names, map) {
   return names.reduce((sum, n) => sum + (map[n] ?? 0), 0) / names.length;

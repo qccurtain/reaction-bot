@@ -10,7 +10,7 @@
 // how long we collect for and what the samples mean differs.
 // ============================================================================
 
-import { CONFIG } from "./config.js";
+import { CONFIG } from "./config.js?v=0.2.2-1";
 
 export class BaselineCollector {
   constructor({ durationMs, minSamples } = {}) {

@@ -13,7 +13,7 @@
 // psychological or emotional diagnoses.
 // ============================================================================
 
-import { CONFIG, STATES, STATE_PRIORITY, TERM_SIGNALS } from "./config.js";
+import { CONFIG, STATES, STATE_PRIORITY, TERM_SIGNALS } from "./config.js?v=0.2.2-1";
 
 function avg(...vals) {
   return vals.reduce((a, b) => a + b, 0) / vals.length;

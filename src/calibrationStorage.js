@@ -1,5 +1,5 @@
 // Only numeric summaries are saved locally. No samples, images, or network requests.
-import { TERM_SIGNALS, EXPRESSION_PROFILES, CONFIG } from './config.js';
+import { TERM_SIGNALS, EXPRESSION_PROFILES, CONFIG } from './config.js?v=0.2.2-1';
 const KEY = 'reaction-bot.calibration.v1';
 const VERSION = 1;
 const requiredSignals = [...new Set([...Object.values(TERM_SIGNALS).flat(), ...Object.keys(CONFIG.activity.weights)])];

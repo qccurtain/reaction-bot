@@ -7,7 +7,7 @@
 // ============================================================================
 
 import { FilesetResolver, FaceLandmarker } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21";
-import { MODEL_URL, WASM_URL, CONFIG } from "./config.js";
+import { MODEL_URL, WASM_URL, CONFIG } from "./config.js?v=0.2.2-1";
 
 let landmarker = null;
 let lastVideoTime = -1;

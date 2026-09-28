@@ -2,11 +2,11 @@
 <html><body>
 <pre id="out">running…</pre>
 <script type="module">
-import { BaselineCollector } from "./src/baseline.js";
-import { StateEngine } from "./src/stateEngine.js";
-import { ExpressionCalibrator, personalizeWeights } from "./src/expressionCalibration.js";
-import { readCalibration, saveCalibration, restoreCalibration, clearCalibration } from "./src/calibrationStorage.js";
-import { STATES, CONFIG } from "./src/config.js";
+import { BaselineCollector } from "./src/baseline.js?v=0.2.2-1";
+import { StateEngine } from "./src/stateEngine.js?v=0.2.2-1";
+import { ExpressionCalibrator, personalizeWeights } from "./src/expressionCalibration.js?v=0.2.2-1";
+import { readCalibration, saveCalibration, restoreCalibration, clearCalibration } from "./src/calibrationStorage.js?v=0.2.2-1";
+import { STATES, CONFIG } from "./src/config.js?v=0.2.2-1";
 
 // ---- fake clock: advance time deterministically instead of relying on
 // real wall-clock waits, since baseline.js/stateEngine.js only ever call
