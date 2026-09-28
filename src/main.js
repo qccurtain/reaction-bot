@@ -12,10 +12,30 @@ import { ExpressionCalibrator } from "./expressionCalibration.js";
 import { StateEngine } from "./stateEngine.js";
 import { EXPRESSION_PROFILES } from "./config.js";
 import * as ui from "./ui.js";
+import { readCalibration, restoreCalibration, saveCalibration, clearCalibration } from "./calibrationStorage.js";
 
 const baseline = new BaselineCollector();
 const exprCalibrator = new ExpressionCalibrator(baseline);
 const stateEngine = new StateEngine(baseline, exprCalibrator);
+const savedCalibration = readCalibration();
+if (savedCalibration.status === "loaded") restoreCalibration(savedCalibration.data, baseline, exprCalibrator);
+ui.setSavedStatus(savedCalibration.status === "loaded"
+  ? "Saved calibration loaded from this browser. Recalibrate if lighting, camera position, or person changes."
+  : "Calibration will be saved on this browser only. No images or video are saved.");
+
+function persistCalibration() {
+  ui.setSavedStatus(saveCalibration(baseline, exprCalibrator)
+    ? "Calibration saved on this browser. Next time, just tap Start Camera."
+    : "Browser storage unavailable: calibration works for this session but cannot be saved.");
+}
+function onForgetSaved() {
+  if (!["idle", "running", "paused"].includes(appState)) return;
+  const cleared = clearCalibration();
+  if (cleared && appState === "idle") { baseline.reset(); exprCalibrator.clearAll(); }
+  ui.setSavedStatus(cleared
+    ? "Saved copy cleared. Current running calibration stays active until you close the page or recalibrate."
+    : "Could not clear browser storage. Try clearing this site’s data in browser settings.");
+}
 
 const EXPR_QUEUE = Object.keys(EXPRESSION_PROFILES); // ["SURPRISE", "SMILE", "FROWN"]
 
@@ -46,6 +66,7 @@ function enterRunning() {
 
 function beginCalibration() {
   appState = "calibrating";
+  clearCalibration(); // old profiles must never be paired with the new neutral baseline
   baseline.start();
   lastFrameTs = null;
   ui.hideExprFlow();
@@ -62,7 +83,7 @@ function offerExpressionCalibration() {
   ui.showExprFlow({
     text:
       "Optional: personalize SHOCKED / HAPPY / TILTED detection using a few of your own expressions? " +
-      "Takes about 15 seconds. This never leaves your session — nothing is uploaded or saved after you close the page.",
+      "Numeric calibration is saved on this browser for next time. No photos or video are saved or uploaded.",
     buttons: [{ label: "Start Personalizing" }, { label: "Skip" }],
   });
 }
@@ -106,6 +127,7 @@ function advanceExprQueue() {
 
 function finishExpressionFlow() {
   currentBurst = null;
+  persistCalibration();
   enterRunning();
 }
 
@@ -114,6 +136,7 @@ function handleExprBurstDone(profileName) {
   currentBurst = null;
   if (evalResult.accepted) {
     exprCalibrator.commit(evalResult);
+    persistCalibration();
     appState = "expr_capturing"; // brief confirmation, still non-interactive
     const profile = EXPRESSION_PROFILES[profileName];
     ui.showExprFlow({ text: `Got it — ${profile.label} calibrated. ✓`, buttons: [] });
@@ -213,8 +236,13 @@ async function onStart() {
     if (attempt !== startAttempt) return; // a newer attempt superseded this one
 
     ui.setStatus("Camera ready");
+    if (baseline.done) {
+      stateEngine.beginSession();
+      enterRunning();
+    } else {
+      beginCalibration();
+    }
     startDetectionLoop(ui.dom.video, onDetectionResult);
-    beginCalibration();
   } catch (err) {
     if (attempt !== startAttempt) return;
     console.error(err);
@@ -235,6 +263,7 @@ function onPersonalize() {
   if (appState !== "running") return;
   leaveRunning();
   exprCalibrator.clearAll();
+  persistCalibration();
   exprIndex = 0;
   prepareExprCapture();
 }
@@ -305,7 +334,7 @@ function onExprButton(slot) {
   }
 }
 
-ui.onButtons({ onStart, onRecalibrate, onPersonalize, onPause, onResume, onReset, onToggleDebug, onInspect, onExprButton });
+ui.onButtons({ onForgetSaved, onStart, onRecalibrate, onPersonalize, onPause, onResume, onReset, onToggleDebug, onInspect, onExprButton });
 ui.setInspectState("SHOCKED");
 ui.setButtons({ started: false, calibrating: false, paused: false });
 

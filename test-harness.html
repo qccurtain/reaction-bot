@@ -5,6 +5,7 @@
 import { BaselineCollector } from "./src/baseline.js";
 import { StateEngine } from "./src/stateEngine.js";
 import { ExpressionCalibrator, personalizeWeights } from "./src/expressionCalibration.js";
+import { readCalibration, saveCalibration, restoreCalibration, clearCalibration } from "./src/calibrationStorage.js";
 import { STATES, CONFIG } from "./src/config.js";
 
 // ---- fake clock: advance time deterministically instead of relying on
@@ -372,6 +373,40 @@ async function run() {
   assert(exercise(smileCal,{jawOpen:.5,mouthSmileLeft:.10,mouthSmileRight:.10},STATES.HAPPY),"open-mouth genuine smile still triggers HAPPY");
   const cheekOnly=sampleProfile(smileCal,"SMILE",{cheekSquintLeft:.3,cheekSquintRight:.3});
   assert(!cheekOnly.accepted,"cheek-only sample without smiling mouth corners is rejected");
+
+
+  log("=== Jaw-dominated surprise and persistence regressions ===");
+  const jawCal = new ExpressionCalibrator(baseline);
+  const jawSample = sampleProfile(jawCal,"SURPRISE",{jawOpen:.6});
+  assert(!jawSample.accepted,"jaw-only surprise calibration is rejected");
+  jawCal.commit({...jawSample,accepted:true}); // legacy/incorrect profile cannot bypass runtime guard
+  assert(!exercise(jawCal,{jawOpen:.6},STATES.SHOCKED),"personalized jaw-only opening does not trigger SHOCKED");
+  assert(!exercise(jawCal,{jawOpen:.6,browInnerUp:.065,eyeWideLeft:.06,eyeWideRight:.06},STATES.SHOCKED),"jaw with weak upper-face cross-talk does not trigger SHOCKED");
+  assert(exercise(jawCal,{jawOpen:.6,browInnerUp:.35},STATES.SHOCKED),"jaw plus clear brow raise still triggers SHOCKED");
+  assert(exercise(jawCal,{jawOpen:.6,eyeWideLeft:.3,eyeWideRight:.3},STATES.SHOCKED),"jaw plus clear eye widening still triggers SHOCKED");
+  const memory = new Map();
+  const storage = {getItem:k=>memory.get(k)??null,setItem:(k,v)=>memory.set(k,v),removeItem:k=>memory.delete(k)};
+  assert(readCalibration(storage).status === "empty","first visit has no calibration");
+  assert(saveCalibration(baseline,ec,storage),"accepted numeric calibration saves successfully");
+  const loaded = readCalibration(storage);
+  assert(loaded.status === "loaded","saved calibration survives a fresh read");
+  const restoredBase = new BaselineCollector();
+  const restoredCal = new ExpressionCalibrator(restoredBase);
+  restoreCalibration(loaded.data,restoredBase,restoredCal);
+  assert(restoredBase.done && restoredBase.samples.length === 0,"restore needs no camera frames or historical samples");
+  assert(restoredBase.mean.jawOpen === baseline.mean.jawOpen,"neutral baseline round-trips exactly");
+  assert(restoredCal.isCalibrated("FROWN"),"valid personal frown survives reload");
+  assert(![...memory.values()][0].includes('samples'),"stored data contains no sample history");
+  const key=[...memory.keys()][0]; const good=memory.get(key);
+  memory.set(key,'{broken'); assert(readCalibration(storage).status !== "loaded","corrupted storage is ignored");
+  memory.set(key,JSON.stringify({...JSON.parse(good),version:999})); assert(readCalibration(storage).status !== "loaded","incompatible record is ignored");
+  const bad=JSON.parse(good); bad.mean.jawOpen=-1;
+  memory.set(key,JSON.stringify(bad)); assert(readCalibration(storage).status !== "loaded","invalid baseline numeric range is rejected");
+  const blocked={getItem(){throw Error('blocked')},setItem(){throw Error('quota')},removeItem(){throw Error('blocked')}};
+  assert(readCalibration(blocked).status === "unavailable" && !saveCalibration(baseline,ec,blocked),"blocked or full storage does not break calibration");
+  assert(!clearCalibration(blocked),"failed clear is reported honestly");
+  memory.set(key,good); assert(clearCalibration(storage) && readCalibration(storage).status === "empty","clear removes saved calibration");
+  assert(saveCalibration(baseline,new ExpressionCalibrator(baseline),storage),"skipped personalization can still save neutral calibration");
 
   document.getElementById("out").textContent = results.join("\n") + `\n\n${pass} passed, ${fail} failed.`;
   console.log("TEST_HARNESS_RESULTS\n" + results.join("\n") + `\n\n${pass} passed, ${fail} failed.`);

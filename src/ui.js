@@ -13,6 +13,8 @@ export const dom = {
   confidenceText: el("confidenceText"),
   calibrationText: el("calibrationText"),
   btnStart: el("btnStart"),
+  btnForgetSaved: el("btnForgetSaved"),
+  savedStatus: el("savedStatus"),
   btnRecalibrate: el("btnRecalibrate"),
   btnPersonalize: el("btnPersonalize"),
   btnPause: el("btnPause"),
@@ -41,6 +43,8 @@ export const dom = {
 
 const STATE_CLASS_PREFIX = "state-";
 
+export function setSavedStatus(text) { dom.savedStatus.textContent = text; }
+
 export function setStatus(text) {
   dom.statusBadge.textContent = text;
 }
@@ -61,6 +65,7 @@ export function setStateDisplay(stateName, confidence) {
 }
 
 export function setButtons({ started, calibrating, paused }) {
+  dom.btnForgetSaved.disabled = calibrating;
   dom.btnStart.disabled = started;
   dom.btnStart.textContent = started ? "Camera Running" : "Start Camera";
   dom.btnRecalibrate.disabled = !started || calibrating || paused;
@@ -161,6 +166,7 @@ export function renderInspect(breakdown) {
 }
 
 export function onButtons(handlers) {
+  dom.btnForgetSaved.addEventListener("click", handlers.onForgetSaved);
   dom.btnStart.addEventListener("click", handlers.onStart);
   dom.btnRecalibrate.addEventListener("click", handlers.onRecalibrate);
   dom.btnPersonalize.addEventListener("click", handlers.onPersonalize);

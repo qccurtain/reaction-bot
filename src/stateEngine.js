@@ -343,8 +343,14 @@ export class StateEngine {
       confusedW.headTilt * headTiltSig;
 
     // ---- persistence gates for expressive states ----
-    const shockedAboveEnter = shockedScore >= cfg.SHOCKED.enterThreshold || shockedAltQualifies;
-    const shockedBelowExit = shockedScore < cfg.SHOCKED.exitThreshold && !shockedAltQualifies;
+    // Personal weights may favor jaw motion; require independent upper-face evidence.
+    const upper = cfg.SHOCKED.upperFace;
+    const browDelta = this.baseline.delta("browInnerUp", this.fastEma.browInnerUp ?? 0);
+    const eyeDelta = avg(...["eyeWideLeft", "eyeWideRight"].map(n => this.baseline.delta(n, this.fastEma[n] ?? 0)));
+    const upperFaceQualifies = (sig("browInnerUp") >= upper.minEvidence && browDelta >= upper.minBrowDelta)
+      || (avg(sig("eyeWideLeft"), sig("eyeWideRight")) >= upper.minEvidence && eyeDelta >= upper.minEyeDelta);
+    const shockedAboveEnter = upperFaceQualifies && (shockedScore >= cfg.SHOCKED.enterThreshold || shockedAltQualifies);
+    const shockedBelowExit = !upperFaceQualifies || (shockedScore < cfg.SHOCKED.exitThreshold && !shockedAltQualifies);
     this.gates[STATES.SHOCKED].update(now, shockedAboveEnter, shockedBelowExit);
     this.gates[STATES.HAPPY].update(now, happyScore >= cfg.HAPPY.enterThreshold, happyScore < cfg.HAPPY.exitThreshold);
     this.gates[STATES.TILTED].update(now, tiltedScore >= cfg.TILTED.enterThreshold, tiltedScore < cfg.TILTED.exitThreshold);
@@ -393,7 +399,7 @@ export class StateEngine {
     // qualifies -- if SHOCKED confirmed via the alt (brow-raise) path while
     // the primary weighted score stayed low, showing the low primary score
     // as "confidence" would be misleading.
-    const shockedEffectiveScore = shockedAltQualifies
+    const shockedEffectiveScore = !upperFaceQualifies ? 0 : shockedAltQualifies
       ? Math.max(shockedScore, clamp01((browInnerUpSig + shockedAltSupport) / 2))
       : shockedScore;
 
@@ -475,6 +481,7 @@ export class StateEngine {
         browInnerUp: browInnerUpSig,
         suddenChange,
         altQualifies: shockedAltQualifies,
+        upperFaceQualifies,
         weights: shockedW,
       },
       HAPPY: { score: happyScore, smileQualifies, smileDelta, smile, cheekSquint, laughBonus, weights: happyW },

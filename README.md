@@ -144,10 +144,10 @@ touching the shared default thresholds at all.
   provably helps (crosses a threshold the default formula structurally
   cannot) versus the real anecdotal report, which may need `config.js`
   tuning on top.
-- **Nothing here is persisted.** Calibration profiles live only in the
-  `ExpressionCalibrator` instance in page memory; reloading the page or
-  closing the tab discards them (matches "no camera frame or calibration
-  data is uploaded or saved").
+- **Numeric calibration is saved on this browser.** Neutral statistics and
+  accepted expression amplitudes are restored after reloading. Camera frames
+  and video are never saved or uploaded. Use Clear Saved Calibration to remove
+  the saved copy. See v0.2.2 below for storage limitations.
 
 **Also fixed alongside this:** the debug panel's "Candidate state" used to
 just echo whatever was already confirmed/active, which was useless for
@@ -366,3 +366,7 @@ Personal bands are floored by the neutral noise band and can reduce sensitivity;
 
 ### v0.2.1 false-positive guards
 HAPPY now requires mouth-corner lift above neutral; jaw opening contributes no smile score. TILTED requires brow or lip tension, never squint alone. Calibration rejects profiles missing these defining signals and waits for Record before each pose. These stricter guards can miss subtle expressions; skip a rejected profile rather than forcing it. Regression tests cover jaw/weak-smile cross-talk, squint-dominated profiles and genuine smiles/frowns.
+
+
+### v0.2.2 — upper-face evidence and saved calibration
+SHOCKED requires a meaningful eyebrow raise or eye widening beyond neutral, regardless of personalized jaw weights. Jaw-only surprise samples are rejected. Calibration summaries (neutral mean/std and accepted expression amplitudes) are saved in localStorage on this browser only, never uploaded. Start Camera restores them without redoing calibration. Recalibrate when person, lighting or camera position changes. Clear Saved Calibration removes the saved copy; an active session keeps its current calibration until closed or recalibrated. Private browsing, blocked storage or clearing site data may remove/prevent persistence. Invalid or incompatible records are ignored. Existing v0.2.1 sessions were memory-only; calibrate once in v0.2.2 to save.

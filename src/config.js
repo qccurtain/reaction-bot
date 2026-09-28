@@ -101,6 +101,7 @@ export const CONFIG = {
 
   states: {
     SHOCKED: {
+      upperFace: { minEvidence: 0.7, minBrowDelta: 0.05, minEyeDelta: 0.035 },
       enterThreshold: 0.5,
       exitThreshold: 0.28,
       minDurationMs: 350, // fast to enter (spec: ~300-800ms)

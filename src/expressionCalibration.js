@@ -8,8 +8,8 @@
 // comment path ever runs for that state. See config.js
 // "Optional personal expression calibration" for the tunable constants.
 //
-// Data lives only in memory for this page session (a plain instance field on
-// this class) -- never written to storage, never sent anywhere.
+// This class holds live numeric summaries. calibrationStorage.js saves these
+// locally for reuse, at the user's request. Nothing is sent to a server.
 // ============================================================================
 
 import { EXPRESSION_PROFILES, EXPRESSION_CALIBRATION, TERM_SIGNALS, STATE_TO_PROFILE } from "./config.js";
@@ -89,7 +89,9 @@ export class ExpressionCalibrator {
       ? (salienceByTerm.smile ?? 0) >= required
       : profileName === "FROWN"
         ? Math.max(salienceByTerm.browDown ?? 0, salienceByTerm.mouthPress ?? 0, salienceByTerm.mouthFrown ?? 0) >= required
-        : true;
+        : profileName === "SURPRISE"
+          ? Math.max(salienceByTerm.browInnerUp ?? 0, salienceByTerm.eyeWideLeft ?? 0, salienceByTerm.eyeWideRight ?? 0) >= required
+          : true;
     const accepted = definingMotion && maxSalience >= EXPRESSION_CALIBRATION.rejectSalienceThreshold;
     return { profileName, accepted, maxSalience, ampByTerm, salienceByTerm };
   }
